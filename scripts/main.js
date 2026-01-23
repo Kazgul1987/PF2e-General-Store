@@ -26,11 +26,16 @@ function getPackIndex(pack) {
         fields: [
           "img",
           "system.price",
+          "type",
         ],
       })
     );
   }
   return PACK_INDEX_CACHE.get(pack.collection);
+}
+
+function isEquipmentEntry(entry) {
+  return entry?.type === "equipment";
 }
 
 async function getItemDescription(packCollection, itemId) {
@@ -121,6 +126,7 @@ async function updateSearchResults(query, listElement) {
         pack: packs[indexPosition],
       }))
     )
+    .filter(({ entry }) => isEquipmentEntry(entry))
     .filter(({ entry }) => entry.name?.toLowerCase().includes(searchTerm))
     .map(({ entry, pack }) => ({
       icon: entry.img ?? "icons/svg/item-bag.svg",

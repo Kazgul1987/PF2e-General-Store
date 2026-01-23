@@ -153,8 +153,11 @@ function hasCurrencyValues(currency) {
   if (!currency || typeof currency !== "object") {
     return false;
   }
-  return ["pp", "gp", "sp", "cp"].some((key) =>
-    Object.prototype.hasOwnProperty.call(currency, key)
+  if (typeof CoinsPF2e !== "undefined" && currency instanceof CoinsPF2e) {
+    return true;
+  }
+  return ["pp", "gp", "sp", "cp"].some(
+    (key) => key in currency || Number.isFinite(currency[key])
   );
 }
 

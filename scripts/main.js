@@ -549,7 +549,47 @@ async function openShopDialog(actor) {
   });
 }
 
+function getDefaultShopActor() {
+  const controlledActor = canvas?.tokens?.controlled?.[0]?.actor ?? null;
+  return controlledActor ?? game.user?.character ?? null;
+}
+
+function openGmMenu() {
+  const content = `
+    <p>General Store GM-Menü</p>
+    <p>Öffne den General Store für den aktuell ausgewählten Token oder deinen Charakter.</p>
+  `;
+
+  const dialog = new Dialog({
+    title: "General Store (GM)",
+    content,
+    buttons: {
+      open: {
+        label: "Store öffnen",
+        callback: () => {
+          const actor = getDefaultShopActor();
+          if (!actor) {
+            ui.notifications.warn("Bitte wähle einen Token oder Charakter aus.");
+            return false;
+          }
+          void openShopDialog(actor);
+          return true;
+        },
+      },
+      close: {
+        label: "Schließen",
+      },
+    },
+    default: "open",
+  });
+
+  dialog.render(true);
+}
+
 function addActorSheetHeaderControl(app, html) {
+  if (!game.user?.isGM) {
+    return;
+  }
   const appElement = html.closest(".app");
   const header = appElement.find(".window-header");
   if (!header.length || header.find(".pf2e-general-store-btn").length) {
@@ -570,9 +610,35 @@ function addActorSheetHeaderControl(app, html) {
   header.find(".window-title").after(button);
 }
 
+function addGmControlsButton(app, html) {
+  if (!game.user?.isGM) {
+    return;
+  }
+
+  const controlsRoot = html.closest("#controls");
+  const targetContainer = controlsRoot.find(".main-controls, .control-tools").first();
+  if (!targetContainer.length || targetContainer.find(".pf2e-general-store-control").length) {
+    return;
+  }
+
+  const button = $(`
+    <li class="control-tool pf2e-general-store-control" title="General Store (GM)">
+      <i class="fas fa-store" aria-hidden="true"></i>
+    </li>
+  `);
+
+  button.on("click", (event) => {
+    event.preventDefault();
+    openGmMenu();
+  });
+
+  targetContainer.append(button);
+}
+
 export function registerPF2eGeneralStore() {
   Hooks.on("renderActorSheet", addActorSheetHeaderControl);
   Hooks.on("renderActorSheetPF2e", addActorSheetHeaderControl);
+  Hooks.on("renderSceneControls", addGmControlsButton);
 }
 
 Hooks.once("init", () => {

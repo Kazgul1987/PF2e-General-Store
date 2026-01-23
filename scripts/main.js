@@ -26,8 +26,6 @@ function getPackIndex(pack) {
         fields: [
           "img",
           "system.price",
-          "system.price.value",
-          "system.price.value.gp",
         ],
       })
     );

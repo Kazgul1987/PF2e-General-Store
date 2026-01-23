@@ -56,8 +56,24 @@ function getPackIndex(pack) {
   return PACK_INDEX_CACHE.get(pack.collection);
 }
 
-function isEquipmentEntry(entry) {
-  return entry?.type === "equipment";
+const ALLOWED_ITEM_TYPES = new Set([
+  "equipment",
+  "weapon",
+  "shield",
+  "armor",
+  "consumable",
+  "treasure",
+  "backpack",
+]);
+
+function isAllowedItemEntry(entry) {
+  if (!entry) {
+    return false;
+  }
+  if (ALLOWED_ITEM_TYPES.has(entry.type)) {
+    return true;
+  }
+  return entry.system?.consumableType === "ammo";
 }
 
 async function getItemDescription(packCollection, itemId) {
@@ -381,7 +397,7 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
         pack: packs[indexPosition],
       }))
     )
-    .filter(({ entry }) => isEquipmentEntry(entry))
+    .filter(({ entry }) => isAllowedItemEntry(entry))
     .filter(({ entry }) => entryMatchesGmFilters(entry, gmFilters))
     .filter(({ entry }) => entry.name?.toLowerCase().includes(searchTerm))
     .map(({ entry, pack }) => ({

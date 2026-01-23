@@ -397,16 +397,22 @@ function setupResultInteractions(resultsList) {
 async function openShopDialog(actor) {
   const content = await renderTemplate(SHOP_DIALOG_TEMPLATE, {});
 
-  const dialog = new Dialog({
-    title: "General Store",
-    content,
-    buttons: {
-      close: {
-        label: "Schließen",
+  const dialog = new Dialog(
+    {
+      title: "General Store",
+      content,
+      buttons: {
+        close: {
+          label: "Schließen",
+        },
       },
+      default: "close",
     },
-    default: "close",
-  });
+    {
+      width: 720,
+      height: 650,
+    }
+  );
 
   dialog.render(true);
 

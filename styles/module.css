@@ -244,12 +244,15 @@
   align-items: center;
   display: grid;
   gap: 0.5rem;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: 1fr auto auto auto auto;
   padding: 0.2rem 0;
 }
 
 .pf2e-general-store-gm .bulk-order__gm-player {
-  grid-template-columns: 1fr auto auto;
+  align-items: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
 }
 
 .pf2e-general-store-dialog .bulk-order__item + .bulk-order__item,
@@ -264,6 +267,39 @@
 .pf2e-general-store-dialog .bulk-order__item-price {
   color: rgba(0, 0, 0, 0.7);
   font-variant-numeric: tabular-nums;
+}
+
+.pf2e-general-store-dialog .bulk-order__item-unit,
+.pf2e-general-store-gm .bulk-order__gm-item-unit,
+.pf2e-general-store-gm .bulk-order__gm-item-total,
+.pf2e-general-store-dialog .bulk-order__item-price {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pf2e-general-store-gm .bulk-order__gm-player-header {
+  align-items: center;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: 1fr auto auto auto;
+}
+
+.pf2e-general-store-gm .bulk-order__gm-player-items {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 0.5rem;
+}
+
+.pf2e-general-store-gm .bulk-order__gm-item {
+  align-items: center;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: 1fr auto auto auto;
+  padding: 0.15rem 0;
+}
+
+.pf2e-general-store-gm .bulk-order__gm-item + .bulk-order__gm-item {
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
 }
 
 .pf2e-general-store-dialog .bulk-order__remove {

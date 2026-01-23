@@ -205,15 +205,15 @@ async function deductCurrency(actor, costGold) {
       "Erwartet: system.currency, system.currency.value oder system.party.currency.";
     ui.notifications.warn(message);
     console.warn(message, actor);
-    return false;
+    return { ok: false, reason: "missing-path" };
   }
   const availableCopper = getCurrencyInCopper(currency);
   if (availableCopper < costCopper) {
-    return false;
+    return { ok: false, reason: "insufficient-funds" };
   }
   const updatedCurrency = splitCopper(availableCopper - costCopper);
   await actor.update({ [path]: updatedCurrency });
-  return true;
+  return { ok: true };
 }
 
 async function handlePurchase({ actor, packCollection, itemId, name, priceGold, quantity, useActor, useParty }) {
@@ -247,9 +247,11 @@ async function handlePurchase({ actor, packCollection, itemId, name, priceGold, 
     }
   }
 
-  const hasFunds = await deductCurrency(paymentActor, totalPrice);
-  if (!hasFunds) {
-    ui.notifications.warn("Nicht genug Gold für den Kauf.");
+  const paymentResult = await deductCurrency(paymentActor, totalPrice);
+  if (!paymentResult.ok) {
+    if (paymentResult.reason === "insufficient-funds") {
+      ui.notifications.warn("Nicht genug Gold für den Kauf.");
+    }
     return;
   }
 

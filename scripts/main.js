@@ -1313,10 +1313,71 @@ function addGmControlsButton(app, html) {
   targetContainer.append(button);
 }
 
+function addGmChatControlButton(app, html) {
+  if (!game.user?.isGM) {
+    return;
+  }
+
+  const hasExistingControl = (container) =>
+    container.find("#pf2e-general-store-chat-control, .pf2e-general-store-control").length;
+  const isV13 = Number(game.release?.generation ?? 0) >= 13;
+
+  if (isV13) {
+    const navigationRoot = html.closest("#ui-right").length ? html.closest("#ui-right") : html;
+    const targetContainer = navigationRoot.find(".tabs .flexcol").first();
+    if (!targetContainer.length || hasExistingControl(targetContainer)) {
+      return;
+    }
+
+    const button = $(`
+      <button
+        type="button"
+        class="pf2e-general-store-control"
+        id="pf2e-general-store-chat-control"
+        title="General Store (GM)"
+      >
+        <i class="fas fa-store" aria-hidden="true"></i>
+      </button>
+    `);
+
+    button.on("click", (event) => {
+      event.preventDefault();
+      openGmMenu();
+    });
+
+    targetContainer.append(button);
+    return;
+  }
+
+  const chatControls = $("#chat-controls");
+  const chatControlIcon = chatControls.find(".chat-control-icon").first();
+  if (!chatControlIcon.length || hasExistingControl(chatControls)) {
+    return;
+  }
+
+  const button = $(`
+    <a
+      class="chat-control-icon pf2e-general-store-control"
+      id="pf2e-general-store-chat-control"
+      title="General Store (GM)"
+    >
+      <i class="fas fa-store" aria-hidden="true"></i>
+    </a>
+  `);
+
+  button.on("click", (event) => {
+    event.preventDefault();
+    openGmMenu();
+  });
+
+  chatControlIcon.before(button);
+}
+
 export function registerPF2eGeneralStore() {
   Hooks.on("renderActorSheet", addActorSheetHeaderControl);
   Hooks.on("renderActorSheetPF2e", addActorSheetHeaderControl);
   Hooks.on("renderSceneControls", addGmControlsButton);
+  Hooks.on("renderSceneNavigation", addGmChatControlButton);
 }
 
 Hooks.once("init", () => {

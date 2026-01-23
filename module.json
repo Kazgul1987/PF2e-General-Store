@@ -3,8 +3,8 @@
   "title": "PF2e General Store",
   "version": "0.1.0",
   "compatibility": {
-    "minimum": "11",
-    "verified": "11"
+    "minimum": "13",
+    "verified": "13"
   },
   "relationships": {
     "systems": [
@@ -12,8 +12,8 @@
         "id": "pf2e",
         "type": "system",
         "compatibility": {
-          "minimum": "5.0.0",
-          "verified": "5.0.0"
+          "minimum": "7.9.1",
+          "verified": "7.9.1"
         }
       }
     ]

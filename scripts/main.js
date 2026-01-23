@@ -411,6 +411,7 @@ async function openShopDialog(actor) {
     {
       width: 720,
       height: 650,
+      resizable: true,
     }
   );
 

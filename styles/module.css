@@ -190,6 +190,23 @@
   padding: 0.5rem 0.75rem;
 }
 
+.pf2e-general-store-purchase .store-option {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.pf2e-general-store-purchase .store-option__row {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.35rem;
+}
+
+.pf2e-general-store-purchase .store-option__availability {
+  color: rgba(0, 0, 0, 0.55);
+  font-size: 0.85em;
+  padding-left: 1.55rem;
+}
+
 .pf2e-general-store-purchase legend {
   font-weight: 600;
   padding: 0 0.25rem;

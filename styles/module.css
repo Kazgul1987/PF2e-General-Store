@@ -60,6 +60,35 @@
   padding: 0;
 }
 
+.pf2e-general-store-dialog .store-result {
+  align-items: center;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: 32px 1fr auto;
+  padding: 0.35rem 0;
+}
+
+.pf2e-general-store-dialog .store-result + .store-result {
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.pf2e-general-store-dialog .store-result__icon {
+  height: 32px;
+  object-fit: contain;
+  width: 32px;
+}
+
+.pf2e-general-store-dialog .store-result__name {
+  font-weight: 600;
+}
+
+.pf2e-general-store-dialog .store-result__price {
+  color: rgba(0, 0, 0, 0.7);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .pf2e-general-store-dialog .store-results .placeholder {
   color: rgba(0, 0, 0, 0.55);
   font-style: italic;

@@ -143,7 +143,91 @@ function positionTooltip(tooltip, event) {
   });
 }
 
-function openPurchaseDialog({ name, priceGold }) {
+function getCurrencyInCopper(currency = {}) {
+  const pp = Number(currency.pp) || 0;
+  const gp = Number(currency.gp) || 0;
+  const sp = Number(currency.sp) || 0;
+  const cp = Number(currency.cp) || 0;
+  return pp * 1000 + gp * 100 + sp * 10 + cp;
+}
+
+function splitCopper(totalCopper) {
+  const remaining = Math.max(0, Math.floor(totalCopper));
+  const pp = Math.floor(remaining / 1000);
+  const gp = Math.floor((remaining % 1000) / 100);
+  const sp = Math.floor((remaining % 100) / 10);
+  const cp = remaining % 10;
+  return { pp, gp, sp, cp };
+}
+
+function getPartyStashActor() {
+  if (game.party) {
+    return game.party;
+  }
+  if (game.actors?.party) {
+    return game.actors.party;
+  }
+  return game.actors?.find((actor) => actor.type === "party") ?? null;
+}
+
+async function deductCurrency(actor, costGold) {
+  const costCopper = Math.round(costGold * 100);
+  const currency = actor.system?.currency ?? {};
+  const availableCopper = getCurrencyInCopper(currency);
+  if (availableCopper < costCopper) {
+    return false;
+  }
+  const updatedCurrency = splitCopper(availableCopper - costCopper);
+  await actor.update({ "system.currency": updatedCurrency });
+  return true;
+}
+
+async function handlePurchase({ actor, packCollection, itemId, name, priceGold, quantity, useActor, useParty }) {
+  if (!actor) {
+    ui.notifications.error("Kein gültiger Actor ausgewählt.");
+    return;
+  }
+
+  const pack = game.packs.get(packCollection);
+  if (!pack) {
+    ui.notifications.error("Compendium nicht gefunden.");
+    return;
+  }
+
+  const item = await pack.getDocument(itemId);
+  if (!item) {
+    ui.notifications.error("Item konnte nicht geladen werden.");
+    return;
+  }
+
+  const totalPrice = priceGold * quantity;
+  let paymentActor = null;
+
+  if (useActor) {
+    paymentActor = actor;
+  } else if (useParty) {
+    paymentActor = getPartyStashActor();
+    if (!paymentActor) {
+      ui.notifications.error("Kein Party-Stash gefunden.");
+      return;
+    }
+  }
+
+  const hasFunds = await deductCurrency(paymentActor, totalPrice);
+  if (!hasFunds) {
+    ui.notifications.warn("Nicht genug Gold für den Kauf.");
+    return;
+  }
+
+  const itemData = item.toObject();
+  delete itemData._id;
+  itemData.system = itemData.system ?? {};
+  itemData.system.quantity = quantity;
+  await actor.createEmbeddedDocuments("Item", [itemData]);
+  ui.notifications.info(`${name} wurde gekauft.`);
+}
+
+function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) {
   const content = `
     <form class="pf2e-general-store-purchase">
       <p class="purchase-title">${name}</p>
@@ -190,6 +274,22 @@ function openPurchaseDialog({ name, priceGold }) {
             ui.notifications.warn("Bitte wähle eine Zahlungsquelle aus.");
             return false;
           }
+
+          if (useActor && useParty) {
+            ui.notifications.warn("Bitte wähle genau eine Zahlungsquelle aus.");
+            return false;
+          }
+
+          void handlePurchase({
+            actor,
+            packCollection,
+            itemId,
+            name,
+            priceGold,
+            quantity,
+            useActor,
+            useParty,
+          });
 
           return true;
         },
@@ -257,11 +357,13 @@ function setupResultInteractions(resultsList) {
     const target = $(event.currentTarget);
     const name = target.data("name") ?? "Unbekanntes Item";
     const priceGold = Number(target.data("price")) || 0;
-    openPurchaseDialog({ name, priceGold });
+    const packCollection = target.data("pack");
+    const itemId = target.data("itemId");
+    openPurchaseDialog({ actor: resultsList.data("actor"), packCollection, itemId, name, priceGold });
   });
 }
 
-async function openShopDialog() {
+async function openShopDialog(actor) {
   const content = await renderTemplate(SHOP_DIALOG_TEMPLATE, {});
 
   const dialog = new Dialog({
@@ -284,6 +386,7 @@ async function openShopDialog() {
 
     const searchInput = html.find('input[name="store-search"]');
     const resultsList = html.find(".store-results ul");
+    resultsList.data("actor", actor ?? null);
     const debouncedSearch = debounce((value) => {
       void updateSearchResults(value, resultsList);
     });
@@ -313,7 +416,7 @@ function addActorSheetHeaderControl(app, html) {
 
   button.on("click", (event) => {
     event.preventDefault();
-    openShopDialog();
+    openShopDialog(app.actor ?? null);
   });
 
   header.find(".window-title").after(button);

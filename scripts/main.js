@@ -25,6 +25,7 @@ function getPackIndex(pack) {
       pack.getIndex({
         fields: [
           "img",
+          "system.level",
           "system.price",
           "system.traits",
           "type",
@@ -94,6 +95,11 @@ function normalizeTraits(traitsData) {
   return [];
 }
 
+function normalizeLevel(levelData) {
+  const levelValue = levelData?.value ?? levelData;
+  return Number.isFinite(levelValue) ? levelValue : null;
+}
+
 function renderSearchResults(results, listElement) {
   listElement.empty();
   if (!results.length) {
@@ -116,6 +122,7 @@ function renderSearchResults(results, listElement) {
           <img class="store-result__icon" src="${result.icon}" alt="" />
           <span class="store-result__details">
             <span class="store-result__name">${result.name}</span>
+            <span class="store-result__level">Level ${result.level ?? "–"}</span>
             ${
               result.traits?.length
                 ? `<span class="store-result__traits">${result.traits
@@ -158,6 +165,7 @@ async function updateSearchResults(query, listElement) {
       name: entry.name ?? "",
       priceGold: getPriceInGold(entry),
       traits: normalizeTraits(entry.system?.traits),
+      level: normalizeLevel(entry.system?.level),
       pack: pack.collection,
       itemId: entry._id,
     }));

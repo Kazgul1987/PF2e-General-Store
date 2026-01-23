@@ -566,16 +566,19 @@ function splitCopper(totalCopper) {
 
 function getCurrencyUpdate(actor, costGold) {
   const costCopper = Math.round(costGold * 100);
-  const { currency, path } = getActorCurrency(actor);
-  if (!currency || !path) {
-    return { ok: false, reason: "missing-path", path: null, currency: null };
+  if (!actor?.inventory?.removeCurrency) {
+    return { ok: false, reason: "missing-inventory" };
   }
-  const availableCopper = getCurrencyInCopper(currency);
+  const { currency } = getActorCurrency(actor);
+  const availableCopper =
+    actor?.inventory?.currency?.copperValue ?? getCurrencyInCopper(currency ?? {});
+  if (!Number.isFinite(availableCopper)) {
+    return { ok: false, reason: "missing-currency" };
+  }
   if (availableCopper < costCopper) {
-    return { ok: false, reason: "insufficient-funds", path, currency };
+    return { ok: false, reason: "insufficient-funds" };
   }
-  const updatedCurrency = splitCopper(availableCopper - costCopper);
-  return { ok: true, path, updatedCurrency };
+  return { ok: true, costCopper, costCoins: splitCopper(costCopper) };
 }
 
 function formatCurrencyDisplay(currency) {
@@ -611,23 +614,18 @@ function getPartyStashActor() {
 }
 
 async function deductCurrency(actor, costGold) {
-  const costCopper = Math.round(costGold * 100);
-  const { currency, path } = getActorCurrency(actor);
-  if (!currency || !path) {
+  if (!actor?.inventory?.removeCurrency) {
     const actorName = actor?.name ?? "Unbekannter Actor";
-    const message =
-      `Kein unterstützter Currency-Pfad gefunden für ${actorName}. ` +
-      "Erwartet: system.currency oder system.currency.value.";
+    const message = `Kein unterstütztes Inventory für ${actorName} gefunden.`;
     ui.notifications.warn(message);
     console.warn(message, actor);
-    return { ok: false, reason: "missing-path" };
+    return { ok: false, reason: "missing-inventory" };
   }
-  const availableCopper = getCurrencyInCopper(currency);
-  if (availableCopper < costCopper) {
-    return { ok: false, reason: "insufficient-funds" };
+  const update = getCurrencyUpdate(actor, costGold);
+  if (!update.ok) {
+    return update;
   }
-  const updatedCurrency = splitCopper(availableCopper - costCopper);
-  await actor.update({ [path]: updatedCurrency });
+  await actor.inventory.removeCurrency(update.costCoins, { byValue: true });
   return { ok: true };
 }
 
@@ -738,15 +736,13 @@ async function confirmBulkOrder(state) {
     paymentPlan.push({ actor, player, remainder });
   }
 
-  if (partyUsed > 0 && (!partyCurrency.currency || !partyCurrency.path)) {
+  if (partyUsed > 0 && (!partyCurrency.currency || !partyActor?.inventory?.removeCurrency)) {
     ui.notifications.error("Party-Stash konnte nicht belastet werden.");
     return;
   }
 
   const partyUpdate =
-    partyUsed > 0 && partyActor
-      ? getCurrencyUpdate(partyActor, partyUsed)
-      : { ok: true };
+    partyUsed > 0 && partyActor ? getCurrencyUpdate(partyActor, partyUsed) : { ok: true };
   if (partyUsed > 0 && !partyUpdate.ok) {
     ui.notifications.warn("Party-Stash hat nicht genug Gold.");
     return;
@@ -773,13 +769,13 @@ async function confirmBulkOrder(state) {
   }
 
   if (partyUsed > 0 && partyActor) {
-    await partyActor.update({ [partyUpdate.path]: partyUpdate.updatedCurrency });
+    await partyActor.inventory.removeCurrency(partyUpdate.costCoins, { byValue: true });
   }
   for (const entry of actorUpdates) {
     if (!entry || entry.remainder <= 0) {
       continue;
     }
-    await entry.actor.update({ [entry.update.path]: entry.update.updatedCurrency });
+    await entry.actor.inventory.removeCurrency(entry.update.costCoins, { byValue: true });
   }
 
   for (const [userId, player] of players) {

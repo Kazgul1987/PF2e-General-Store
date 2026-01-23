@@ -149,6 +149,30 @@ function getCurrencyInCopper(currency = {}) {
   return pp * 1000 + gp * 100 + sp * 10 + cp;
 }
 
+function hasCurrencyValues(currency) {
+  if (!currency || typeof currency !== "object") {
+    return false;
+  }
+  return ["pp", "gp", "sp", "cp"].some((key) =>
+    Object.prototype.hasOwnProperty.call(currency, key)
+  );
+}
+
+function getActorCurrency(actor) {
+  const directCurrency = actor?.system?.currency;
+  if (hasCurrencyValues(directCurrency)) {
+    return { currency: directCurrency, path: "system.currency" };
+  }
+  if (hasCurrencyValues(directCurrency?.value)) {
+    return { currency: directCurrency.value, path: "system.currency.value" };
+  }
+  const partyCurrency = actor?.system?.party?.currency;
+  if (hasCurrencyValues(partyCurrency)) {
+    return { currency: partyCurrency, path: "system.party.currency" };
+  }
+  return { currency: null, path: null };
+}
+
 function splitCopper(totalCopper) {
   const remaining = Math.max(0, Math.floor(totalCopper));
   const pp = Math.floor(remaining / 1000);
@@ -170,13 +194,22 @@ function getPartyStashActor() {
 
 async function deductCurrency(actor, costGold) {
   const costCopper = Math.round(costGold * 100);
-  const currency = actor.system?.currency ?? {};
+  const { currency, path } = getActorCurrency(actor);
+  if (!currency || !path) {
+    const actorName = actor?.name ?? "Unbekannter Actor";
+    const message =
+      `Kein unterstützter Currency-Pfad gefunden für ${actorName}. ` +
+      "Erwartet: system.currency, system.currency.value oder system.party.currency.";
+    ui.notifications.warn(message);
+    console.warn(message, actor);
+    return false;
+  }
   const availableCopper = getCurrencyInCopper(currency);
   if (availableCopper < costCopper) {
     return false;
   }
   const updatedCurrency = splitCopper(availableCopper - costCopper);
-  await actor.update({ "system.currency": updatedCurrency });
+  await actor.update({ [path]: updatedCurrency });
   return true;
 }
 

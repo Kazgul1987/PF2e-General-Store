@@ -2,6 +2,8 @@
   "id": "pf2e-general-store",
   "title": "PF2e General Store",
   "version": "0.1.0",
+  "manifest": "https://raw.githubusercontent.com/Kazgul1987/PF2e-General-Store/main/module.json",
+  "download": "https://github.com/Kazgul1987/PF2e-General-Store/releases/latest/download/module.zip",
   "compatibility": {
     "minimum": "13",
     "verified": "13"

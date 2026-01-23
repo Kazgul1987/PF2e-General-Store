@@ -211,3 +211,107 @@
   font-weight: 600;
   padding: 0 0.25rem;
 }
+
+.pf2e-general-store-dialog .bulk-order {
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+}
+
+.pf2e-general-store-dialog .bulk-order.is-hidden {
+  display: none;
+}
+
+.pf2e-general-store-dialog .bulk-order__header,
+.pf2e-general-store-gm .bulk-order__gm-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.pf2e-general-store-dialog .bulk-order__items,
+.pf2e-general-store-gm .bulk-order__gm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pf2e-general-store-dialog .bulk-order__item,
+.pf2e-general-store-gm .bulk-order__gm-player {
+  align-items: center;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: 1fr auto auto auto;
+  padding: 0.2rem 0;
+}
+
+.pf2e-general-store-gm .bulk-order__gm-player {
+  grid-template-columns: 1fr auto auto;
+}
+
+.pf2e-general-store-dialog .bulk-order__item + .bulk-order__item,
+.pf2e-general-store-gm .bulk-order__gm-player + .bulk-order__gm-player {
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.pf2e-general-store-dialog .bulk-order__item-name {
+  font-weight: 600;
+}
+
+.pf2e-general-store-dialog .bulk-order__item-price {
+  color: rgba(0, 0, 0, 0.7);
+  font-variant-numeric: tabular-nums;
+}
+
+.pf2e-general-store-dialog .bulk-order__remove {
+  background: none;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0.1rem 0.4rem;
+}
+
+.pf2e-general-store-dialog .bulk-order__footer {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.pf2e-general-store-dialog .bulk-order__total {
+  font-weight: 600;
+}
+
+.pf2e-general-store-dialog .bulk-order__status {
+  color: rgba(0, 0, 0, 0.6);
+}
+
+.pf2e-general-store-dialog .bulk-order__placeholder,
+.pf2e-general-store-gm .bulk-order__placeholder {
+  color: rgba(0, 0, 0, 0.55);
+  font-style: italic;
+  padding: 0.2rem 0;
+}
+
+.pf2e-general-store-gm .bulk-order__gm {
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+}
+
+.pf2e-general-store-gm .bulk-order__gm.is-hidden {
+  display: none;
+}
+
+.pf2e-general-store-gm .bulk-order__gm-total {
+  font-weight: 600;
+}
+
+.pf2e-general-store-gm .bulk-order__gm-confirm {
+  align-self: flex-end;
+}

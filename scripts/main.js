@@ -1318,64 +1318,57 @@ function addGmChatControlButton(app, html) {
     return;
   }
 
-  const hasExistingControl = (container) =>
-    container.find("#pf2e-general-store-chat-control, .pf2e-general-store-control").length;
   const isV13 = Number(game.release?.generation ?? 0) >= 13;
+  const existingControl = document.getElementById("pf2e-general-store-chat-control");
 
   if (isV13) {
-    const $nav = html?.closest ? html : $(html || "#ui-right");
-    const navigationRoot = html?.closest
-      ? $nav.closest("#ui-right").length
-        ? $nav.closest("#ui-right")
-        : $nav
-      : $("#ui-right");
-    const targetContainer = navigationRoot.find(".tabs .flexcol").first();
-    if (!targetContainer.length || hasExistingControl(targetContainer)) {
+    const tabsFlexcol =
+      document.getElementsByClassName("tabs")[0]?.getElementsByClassName("flexcol")[0];
+    if (!tabsFlexcol || existingControl) {
       return;
     }
 
-    const button = $(`
-      <button
-        type="button"
-        class="pf2e-general-store-control"
-        id="pf2e-general-store-chat-control"
-        title="General Store (GM)"
-      >
-        <i class="fas fa-store" aria-hidden="true"></i>
-      </button>
-    `);
+    const buttonElement = document.createElement("button");
+    buttonElement.type = "button";
+    buttonElement.className = "pf2e-general-store-control";
+    buttonElement.id = "pf2e-general-store-chat-control";
+    buttonElement.title = "General Store (GM)";
 
-    button.on("click", (event) => {
+    const iconElement = document.createElement("i");
+    iconElement.className = "fas fa-store";
+    iconElement.setAttribute("aria-hidden", "true");
+    buttonElement.append(iconElement);
+
+    buttonElement.onclick = (event) => {
       event.preventDefault();
       openGmMenu();
-    });
+    };
 
-    targetContainer.append(button);
+    tabsFlexcol.append(buttonElement);
     return;
   }
 
-  const chatControls = $("#chat-controls");
-  const chatControlIcon = chatControls.find(".chat-control-icon").first();
-  if (!chatControlIcon.length || hasExistingControl(chatControls)) {
+  const chatControlLeft = document.getElementsByClassName("chat-control-icon")[0];
+  if (!chatControlLeft || existingControl) {
     return;
   }
 
-  const button = $(`
-    <a
-      class="chat-control-icon pf2e-general-store-control"
-      id="pf2e-general-store-chat-control"
-      title="General Store (GM)"
-    >
-      <i class="fas fa-store" aria-hidden="true"></i>
-    </a>
-  `);
+  const buttonElement = document.createElement("a");
+  buttonElement.className = "chat-control-icon pf2e-general-store-control";
+  buttonElement.id = "pf2e-general-store-chat-control";
+  buttonElement.title = "General Store (GM)";
 
-  button.on("click", (event) => {
+  const iconElement = document.createElement("i");
+  iconElement.className = "fas fa-store";
+  iconElement.setAttribute("aria-hidden", "true");
+  buttonElement.append(iconElement);
+
+  buttonElement.onclick = (event) => {
     event.preventDefault();
     openGmMenu();
-  });
+  };
 
-  chatControlIcon.before(button);
+  chatControlLeft.insertBefore(buttonElement, chatControlLeft.firstElementChild);
 }
 
 export function registerPF2eGeneralStore() {

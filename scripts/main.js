@@ -2,6 +2,7 @@ const MODULE_ID = "pf2e-general-store";
 const SHOP_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/shop-dialog.hbs`;
 const GM_FILTERS_TEMPLATE = `modules/${MODULE_ID}/templates/gm-filters.hbs`;
 const GM_FILTERS_SETTING = "gmFilters";
+const BULK_ORDER_SETTING = "bulkOrderState";
 const PACK_INDEX_CACHE = new Map();
 const ITEM_DESCRIPTION_CACHE = new Map();
 const TOOLTIP_DELAY = 250;
@@ -10,7 +11,14 @@ const DEFAULT_GM_FILTERS = {
   minLevel: null,
   maxLevel: null,
 };
+const DEFAULT_BULK_ORDER = {
+  active: false,
+  gmConfirmed: false,
+  totalPrice: 0,
+  players: {},
+};
 let currentGmFilters = { ...DEFAULT_GM_FILTERS };
+let currentBulkOrder = { ...DEFAULT_BULK_ORDER };
 
 function debounce(callback, delay = 250) {
   let timeoutId;
@@ -162,6 +170,71 @@ function getCurrentGmFilters() {
   );
 }
 
+function calculateBulkOrderTotal(players) {
+  return Object.values(players).reduce((sum, player) => {
+    const itemsTotal = Array.isArray(player.items)
+      ? player.items.reduce(
+          (itemSum, item) =>
+            itemSum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
+          0
+        )
+      : 0;
+    return sum + itemsTotal;
+  }, 0);
+}
+
+function normalizeBulkOrderState(state = {}) {
+  const players = typeof state.players === "object" && state.players ? state.players : {};
+  const normalizedPlayers = Object.entries(players).reduce((acc, [userId, data]) => {
+    const items = Array.isArray(data?.items)
+      ? data.items
+          .map((item) => ({
+            itemId: item?.itemId ?? null,
+            pack: item?.pack ?? null,
+            quantity: Math.max(1, Number(item?.quantity) || 1),
+            price: Number(item?.price) || 0,
+            name: item?.name ?? "Unbekanntes Item",
+          }))
+          .filter((item) => item.itemId && item.pack)
+      : [];
+    acc[userId] = {
+      name: data?.name ?? game.users?.get(userId)?.name ?? "Unbekannt",
+      confirmed: Boolean(data?.confirmed),
+      items,
+    };
+    return acc;
+  }, {});
+
+  const totalPrice = calculateBulkOrderTotal(normalizedPlayers);
+  return {
+    active: Boolean(state.active),
+    gmConfirmed: Boolean(state.gmConfirmed),
+    players: normalizedPlayers,
+    totalPrice,
+  };
+}
+
+function getBulkOrderState() {
+  return normalizeBulkOrderState(
+    game.settings?.get(MODULE_ID, BULK_ORDER_SETTING) ?? currentBulkOrder
+  );
+}
+
+async function setBulkOrderState(nextState) {
+  const normalized = normalizeBulkOrderState(nextState);
+  currentBulkOrder = normalized;
+  await game.settings.set(MODULE_ID, BULK_ORDER_SETTING, normalized);
+  game.socket?.emit(`module.${MODULE_ID}`, {
+    type: "bulkOrderUpdate",
+    state: normalized,
+  });
+  refreshBulkOrderUi();
+}
+
+function isBulkOrderActive() {
+  return getBulkOrderState().active;
+}
+
 async function setCurrentGmFilters(filters) {
   const normalized = normalizeGmFilters(filters);
   currentGmFilters = normalized;
@@ -281,6 +354,14 @@ function refreshOpenStoreDialogs() {
   });
 }
 
+function refreshBulkOrderUi() {
+  const dialogs = document.querySelectorAll(".pf2e-general-store-dialog");
+  dialogs.forEach((dialog) => updateBulkOrderPanel($(dialog)));
+
+  const gmDialogs = document.querySelectorAll(".pf2e-general-store-gm");
+  gmDialogs.forEach((dialog) => updateGmBulkOrderPanel($(dialog)));
+}
+
 async function updateSearchResults(query, listElement, gmFiltersOverride) {
   const searchTerm = query.trim().toLowerCase();
   if (!searchTerm) {
@@ -314,6 +395,114 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
     }));
 
   renderSearchResults(results, listElement);
+}
+
+function ensureBulkOrderPlayer(state, userId, userName) {
+  const players = { ...state.players };
+  const existing = players[userId];
+  players[userId] = {
+    name: existing?.name ?? userName ?? "Unbekannt",
+    confirmed: existing?.confirmed ?? false,
+    items: Array.isArray(existing?.items) ? [...existing.items] : [],
+  };
+  return { ...state, players };
+}
+
+function requestBulkOrderAction(action, data = {}) {
+  game.socket?.emit(`module.${MODULE_ID}`, {
+    type: "bulkOrderAction",
+    action,
+    data,
+    userId: game.user?.id,
+  });
+}
+
+async function handleBulkOrderAction(payload) {
+  if (!game.user?.isGM) {
+    return;
+  }
+  const state = getBulkOrderState();
+  const { action, data, userId } = payload ?? {};
+
+  if (action === "setActive") {
+    await setBulkOrderState({
+      ...state,
+      active: Boolean(data?.active),
+      gmConfirmed: false,
+    });
+    return;
+  }
+
+  if (!state.active) {
+    return;
+  }
+
+  const userName = game.users?.get(userId)?.name ?? "Unbekannt";
+  const nextState = ensureBulkOrderPlayer(state, userId, userName);
+  const player = nextState.players[userId];
+
+  if (action === "addItem") {
+    const itemId = data?.itemId;
+    const pack = data?.pack;
+    if (!itemId || !pack) {
+      return;
+    }
+    const price = Number(data?.price) || 0;
+    const name = data?.name ?? "Unbekanntes Item";
+    const existingItem = player.items.find(
+      (item) => item.itemId === itemId && item.pack === pack
+    );
+    if (existingItem) {
+      existingItem.quantity += 1;
+    } else {
+      player.items.push({ itemId, pack, quantity: 1, price, name });
+    }
+    player.confirmed = false;
+    await setBulkOrderState({
+      ...nextState,
+      gmConfirmed: false,
+      players: { ...nextState.players, [userId]: player },
+    });
+    return;
+  }
+
+  if (action === "removeItem") {
+    const itemId = data?.itemId;
+    const pack = data?.pack;
+    if (!itemId || !pack) {
+      return;
+    }
+    player.items = player.items.filter(
+      (item) => !(item.itemId === itemId && item.pack === pack)
+    );
+    player.confirmed = false;
+    const updatedPlayers = { ...nextState.players, [userId]: player };
+    if (!player.items.length) {
+      delete updatedPlayers[userId];
+    }
+    await setBulkOrderState({
+      ...nextState,
+      gmConfirmed: false,
+      players: updatedPlayers,
+    });
+    return;
+  }
+
+  if (action === "confirmPlayer") {
+    if (!player.items.length) {
+      return;
+    }
+    player.confirmed = true;
+    await setBulkOrderState({
+      ...nextState,
+      players: { ...nextState.players, [userId]: player },
+    });
+    return;
+  }
+
+  if (action === "gmConfirm") {
+    await confirmBulkOrder(nextState);
+  }
 }
 
 function positionTooltip(tooltip, event) {
@@ -366,6 +555,20 @@ function splitCopper(totalCopper) {
   const sp = Math.floor((remaining % 100) / 10);
   const cp = remaining % 10;
   return { pp, gp, sp, cp };
+}
+
+function getCurrencyUpdate(actor, costGold) {
+  const costCopper = Math.round(costGold * 100);
+  const { currency, path } = getActorCurrency(actor);
+  if (!currency || !path) {
+    return { ok: false, reason: "missing-path", path: null, currency: null };
+  }
+  const availableCopper = getCurrencyInCopper(currency);
+  if (availableCopper < costCopper) {
+    return { ok: false, reason: "insufficient-funds", path, currency };
+  }
+  const updatedCurrency = splitCopper(availableCopper - costCopper);
+  return { ok: true, path, updatedCurrency };
 }
 
 function formatCurrencyDisplay(currency) {
@@ -468,6 +671,136 @@ async function handlePurchase({ actor, packCollection, itemId, name, priceGold, 
   ui.notifications.info(`${name} wurde gekauft.`);
 }
 
+async function confirmBulkOrder(state) {
+  const normalizedState = normalizeBulkOrderState(state);
+  const players = Object.entries(normalizedState.players ?? {});
+  if (!players.length) {
+    ui.notifications.warn("Keine Sammelbestellungen vorhanden.");
+    return;
+  }
+  const allConfirmed = players.every(
+    ([, player]) => player.items?.length && player.confirmed
+  );
+  if (!allConfirmed) {
+    ui.notifications.warn("Nicht alle Spieler haben bestätigt.");
+    return;
+  }
+
+  const itemDocuments = new Map();
+  for (const [, player] of players) {
+    for (const item of player.items ?? []) {
+      const key = `${item.pack}.${item.itemId}`;
+      if (itemDocuments.has(key)) {
+        continue;
+      }
+      const pack = game.packs.get(item.pack);
+      if (!pack) {
+        ui.notifications.error("Compendium nicht gefunden.");
+        return;
+      }
+      const document = await pack.getDocument(item.itemId);
+      if (!document) {
+        ui.notifications.error("Mindestens ein Item konnte nicht geladen werden.");
+        return;
+      }
+      itemDocuments.set(key, document);
+    }
+  }
+
+  const totalCost = normalizedState.totalPrice;
+  const partyActor = getPartyStashActor();
+  const partyCurrency = getActorCurrency(partyActor);
+  const partyAvailable = partyCurrency.currency
+    ? getCurrencyInCopper(partyCurrency.currency) / 100
+    : 0;
+  const partyUsed = Math.min(partyAvailable, totalCost);
+
+  const paymentPlan = [];
+  for (const [userId, player] of players) {
+    const actor = game.users?.get(userId)?.character ?? null;
+    if (!actor) {
+      ui.notifications.error(`Kein Charakter für ${player.name} gefunden.`);
+      return;
+    }
+    const playerTotal = (player.items ?? []).reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0
+    );
+    const share = totalCost > 0 ? (playerTotal / totalCost) * partyUsed : 0;
+    const remainder = Math.max(0, playerTotal - share);
+    paymentPlan.push({ actor, player, remainder });
+  }
+
+  if (partyUsed > 0 && (!partyCurrency.currency || !partyCurrency.path)) {
+    ui.notifications.error("Party-Stash konnte nicht belastet werden.");
+    return;
+  }
+
+  const partyUpdate =
+    partyUsed > 0 && partyActor
+      ? getCurrencyUpdate(partyActor, partyUsed)
+      : { ok: true };
+  if (partyUsed > 0 && !partyUpdate.ok) {
+    ui.notifications.warn("Party-Stash hat nicht genug Gold.");
+    return;
+  }
+
+  const actorUpdates = paymentPlan.map(({ actor, remainder }) =>
+    remainder > 0
+      ? { actor, remainder, update: getCurrencyUpdate(actor, remainder) }
+      : { actor, remainder: 0, update: { ok: true } }
+  );
+
+  for (const entry of actorUpdates) {
+    if (!entry) {
+      continue;
+    }
+    if (!entry.update.ok) {
+      if (entry.update.reason === "insufficient-funds") {
+        ui.notifications.warn("Nicht genug Gold für die Sammelbestellung.");
+      } else {
+        ui.notifications.warn("Zahlung konnte nicht vorbereitet werden.");
+      }
+      return;
+    }
+  }
+
+  if (partyUsed > 0 && partyActor) {
+    await partyActor.update({ [partyUpdate.path]: partyUpdate.updatedCurrency });
+  }
+  for (const entry of actorUpdates) {
+    if (!entry || entry.remainder <= 0) {
+      continue;
+    }
+    await entry.actor.update({ [entry.update.path]: entry.update.updatedCurrency });
+  }
+
+  for (const [userId, player] of players) {
+    const actor = game.users?.get(userId)?.character ?? null;
+    if (!actor) {
+      continue;
+    }
+    for (const item of player.items ?? []) {
+      const itemDocument = itemDocuments.get(`${item.pack}.${item.itemId}`);
+      if (!itemDocument) {
+        continue;
+      }
+      const itemData = itemDocument.toObject();
+      delete itemData._id;
+      itemData.system = itemData.system ?? {};
+      itemData.system.quantity = item.quantity;
+      await actor.createEmbeddedDocuments("Item", [itemData]);
+    }
+  }
+
+  ui.notifications.info("Sammelbestellung abgeschlossen.");
+  await setBulkOrderState({
+    ...normalizedState,
+    gmConfirmed: true,
+    players: {},
+  });
+}
+
 function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) {
   const { currency: actorCurrency } = getActorCurrency(actor);
   const actorCurrencyDisplay = formatCurrencyDisplay(actorCurrency);
@@ -560,6 +893,108 @@ function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) 
   dialog.render(true);
 }
 
+function getPlayerOrder(state, userId) {
+  return state.players?.[userId] ?? { name: "Unbekannt", confirmed: false, items: [] };
+}
+
+function buildBulkOrderItemsHtml(items, allowRemove) {
+  if (!items.length) {
+    return '<li class="bulk-order__placeholder">Keine Items ausgewählt.</li>';
+  }
+  return items
+    .map(
+      (item) => `
+        <li class="bulk-order__item">
+          <span class="bulk-order__item-name">${item.name}</span>
+          <span class="bulk-order__item-qty">x${item.quantity}</span>
+          <span class="bulk-order__item-price">${formatGold(
+            item.price * item.quantity
+          )} gp</span>
+          ${
+            allowRemove
+              ? `<button class="bulk-order__remove" type="button" data-pack="${
+                  item.pack
+                }" data-item-id="${item.itemId}" aria-label="Item entfernen">✕</button>`
+              : ""
+          }
+        </li>
+      `
+    )
+    .join("");
+}
+
+function updateBulkOrderPanel(dialogElement) {
+  const state = getBulkOrderState();
+  const bulkSection = dialogElement.find("[data-bulk-order]");
+  if (!bulkSection.length) {
+    return;
+  }
+  if (!state.active) {
+    bulkSection.addClass("is-hidden");
+    return;
+  }
+  bulkSection.removeClass("is-hidden");
+
+  const userId = game.user?.id;
+  const player = getPlayerOrder(state, userId);
+  const items = player.items ?? [];
+  const total = items.reduce(
+    (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
+    0
+  );
+  bulkSection.find(".bulk-order__items").html(buildBulkOrderItemsHtml(items, true));
+  bulkSection.find(".bulk-order__total").text(`${formatGold(total)} gp`);
+  const statusText = player.confirmed ? "Bestätigt" : "Noch nicht bestätigt";
+  bulkSection.find(".bulk-order__status").text(statusText);
+  const confirmButton = bulkSection.find(".bulk-order__confirm");
+  confirmButton.prop("disabled", items.length === 0 || player.confirmed);
+  confirmButton.text(player.confirmed ? "Bestätigt" : "Bestätigen");
+}
+
+function updateGmBulkOrderPanel(dialogElement) {
+  const state = getBulkOrderState();
+  const bulkSection = dialogElement.find("[data-bulk-order-gm]");
+  if (!bulkSection.length) {
+    return;
+  }
+  const activeToggle = dialogElement.find('input[name="bulk-active"]');
+  activeToggle.prop("checked", state.active);
+
+  if (!state.active) {
+    bulkSection.removeClass("is-hidden");
+    bulkSection.find(".bulk-order__gm-total").text("0 gp");
+    bulkSection.find(".bulk-order__gm-list").html(
+      '<li class="bulk-order__placeholder">Sammelbestellung ist deaktiviert.</li>'
+    );
+    bulkSection.find(".bulk-order__gm-confirm").prop("disabled", true);
+    return;
+  }
+
+  bulkSection.removeClass("is-hidden");
+  const players = Object.entries(state.players ?? {});
+  const listHtml = players.length
+    ? players
+        .map(([userId, player]) => {
+          const itemCount = player.items?.length ?? 0;
+          const statusLabel = player.confirmed ? "Bestätigt" : "Offen";
+          return `
+            <li class="bulk-order__gm-player">
+              <span class="bulk-order__gm-name">${player.name}</span>
+              <span class="bulk-order__gm-items">${itemCount} Items</span>
+              <span class="bulk-order__gm-status">${statusLabel}</span>
+            </li>
+          `;
+        })
+        .join("")
+    : '<li class="bulk-order__placeholder">Noch keine Bestellungen.</li>';
+  bulkSection.find(".bulk-order__gm-list").html(listHtml);
+  bulkSection.find(".bulk-order__gm-total").text(`${formatGold(state.totalPrice)} gp`);
+  const allConfirmed =
+    players.length > 0 &&
+    players.every(([, player]) => player.items?.length && player.confirmed);
+  bulkSection.find(".bulk-order__gm-confirm").prop("disabled", !allConfirmed);
+}
+
 function setupResultInteractions(resultsList) {
   const tooltip = $('<div class="pf2e-general-store-tooltip" role="tooltip"></div>')
     .appendTo(document.body)
@@ -615,7 +1050,22 @@ function setupResultInteractions(resultsList) {
     const priceGold = Number(target.data("price")) || 0;
     const packCollection = target.data("pack");
     const itemId = target.data("itemId");
-    openPurchaseDialog({ actor: resultsList.data("actor"), packCollection, itemId, name, priceGold });
+    if (isBulkOrderActive()) {
+      requestBulkOrderAction("addItem", {
+        itemId,
+        pack: packCollection,
+        price: priceGold,
+        name,
+      });
+      return;
+    }
+    openPurchaseDialog({
+      actor: resultsList.data("actor"),
+      packCollection,
+      itemId,
+      name,
+      priceGold,
+    });
   });
 }
 
@@ -660,6 +1110,19 @@ async function openShopDialog(actor) {
 
     setupResultInteractions(resultsList);
 
+    html.on("click", ".bulk-order__confirm", () => {
+      requestBulkOrderAction("confirmPlayer");
+    });
+
+    html.on("click", ".bulk-order__remove", (event) => {
+      const target = $(event.currentTarget);
+      requestBulkOrderAction("removeItem", {
+        itemId: target.data("itemId"),
+        pack: target.data("pack"),
+      });
+    });
+
+    updateBulkOrderPanel(html);
     void updateSearchResults(searchInput.val() ?? "", resultsList);
   });
 }
@@ -723,6 +1186,27 @@ function openGmMenu() {
     });
 
     dialog.render(true);
+
+    Hooks.once("renderDialog", (app, html) => {
+      if (app !== dialog) {
+        return;
+      }
+
+      html.on("change", 'input[name="bulk-active"]', (event) => {
+        const active = event.currentTarget.checked;
+        void setBulkOrderState({
+          ...getBulkOrderState(),
+          active,
+          gmConfirmed: false,
+        });
+      });
+
+      html.on("click", ".bulk-order__gm-confirm", () => {
+        void confirmBulkOrder(getBulkOrderState());
+      });
+
+      updateGmBulkOrderPanel(html);
+    });
   });
 }
 
@@ -789,16 +1273,32 @@ Hooks.once("init", () => {
     type: Object,
     default: DEFAULT_GM_FILTERS,
   });
+  game.settings.register(MODULE_ID, BULK_ORDER_SETTING, {
+    name: "General Store Sammelbestellung",
+    scope: "world",
+    config: false,
+    type: Object,
+    default: DEFAULT_BULK_ORDER,
+  });
   registerPF2eGeneralStore();
 });
 
 Hooks.once("ready", () => {
   currentGmFilters = getCurrentGmFilters();
+  currentBulkOrder = getBulkOrderState();
   game.socket?.on(`module.${MODULE_ID}`, (payload) => {
-    if (payload?.type !== "gmFiltersUpdate") {
+    if (payload?.type === "gmFiltersUpdate") {
+      currentGmFilters = normalizeGmFilters(payload.filters ?? {});
+      refreshOpenStoreDialogs();
       return;
     }
-    currentGmFilters = normalizeGmFilters(payload.filters ?? {});
-    refreshOpenStoreDialogs();
+    if (payload?.type === "bulkOrderUpdate") {
+      currentBulkOrder = normalizeBulkOrderState(payload.state ?? {});
+      refreshBulkOrderUi();
+      return;
+    }
+    if (payload?.type === "bulkOrderAction") {
+      void handleBulkOrderAction(payload);
+    }
   });
 });

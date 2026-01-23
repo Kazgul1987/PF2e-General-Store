@@ -4,6 +4,7 @@ const GM_FILTERS_TEMPLATE = `modules/${MODULE_ID}/templates/gm-filters.hbs`;
 const GM_FILTERS_SETTING = "gmFilters";
 const BULK_ORDER_SETTING = "bulkOrderState";
 const PACK_INDEX_CACHE = new Map();
+const ITEM_INDEX_CACHE = new Map();
 const ITEM_DESCRIPTION_CACHE = new Map();
 const TOOLTIP_DELAY = 250;
 const DEFAULT_GM_FILTERS = {
@@ -54,6 +55,24 @@ function getPackIndex(pack) {
     );
   }
   return PACK_INDEX_CACHE.get(pack.collection);
+}
+
+async function getCachedItemIndexEntries() {
+  if (ITEM_INDEX_CACHE.has("items")) {
+    return ITEM_INDEX_CACHE.get("items");
+  }
+
+  const packs = getItemCompendiumPacks();
+  const indices = await Promise.all(packs.map((pack) => getPackIndex(pack)));
+  const entries = indices.flatMap((index, indexPosition) =>
+    Array.from(index).map((entry) => ({
+      entry,
+      pack: packs[indexPosition],
+    }))
+  );
+
+  ITEM_INDEX_CACHE.set("items", entries);
+  return entries;
 }
 
 const ALLOWED_ITEM_TYPES = new Set([
@@ -387,16 +406,9 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
   }
 
   const gmFilters = gmFiltersOverride ?? getCurrentGmFilters();
-  const packs = getItemCompendiumPacks();
-  const indices = await Promise.all(packs.map((pack) => getPackIndex(pack)));
+  const itemEntries = await getCachedItemIndexEntries();
 
-  const results = indices
-    .flatMap((index, indexPosition) =>
-      Array.from(index).map((entry) => ({
-        entry,
-        pack: packs[indexPosition],
-      }))
-    )
+  const results = itemEntries
     .filter(({ entry }) => isAllowedItemEntry(entry))
     .filter(({ entry }) => entryMatchesGmFilters(entry, gmFilters))
     .filter(({ entry }) => entry.name?.toLowerCase().includes(searchTerm))
@@ -1383,6 +1395,12 @@ function addGmChatControlButton(app, html) {
   chatControlLeft.insertBefore(buttonElement, chatControlLeft.firstElementChild);
 }
 
+function invalidateCompendiumCaches() {
+  PACK_INDEX_CACHE.clear();
+  ITEM_INDEX_CACHE.clear();
+  ITEM_DESCRIPTION_CACHE.clear();
+}
+
 export function registerPF2eGeneralStore() {
   Hooks.on("renderActorSheet", addActorSheetHeaderControl);
   Hooks.on("renderActorSheetPF2e", addActorSheetHeaderControl);
@@ -1405,12 +1423,16 @@ Hooks.once("init", () => {
     type: Object,
     default: DEFAULT_BULK_ORDER,
   });
+  invalidateCompendiumCaches();
   registerPF2eGeneralStore();
 });
 
 Hooks.once("ready", () => {
   currentGmFilters = getCurrentGmFilters();
   currentBulkOrder = getBulkOrderState();
+  Hooks.on("updateCompendium", invalidateCompendiumCaches);
+  Hooks.on("createCompendium", invalidateCompendiumCaches);
+  Hooks.on("deleteCompendium", invalidateCompendiumCaches);
   game.socket?.on(`module.${MODULE_ID}`, (payload) => {
     if (payload?.type === "gmFiltersUpdate") {
       currentGmFilters = normalizeGmFilters(payload.filters ?? {});

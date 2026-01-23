@@ -1323,7 +1323,12 @@ function addGmChatControlButton(app, html) {
   const isV13 = Number(game.release?.generation ?? 0) >= 13;
 
   if (isV13) {
-    const navigationRoot = html.closest("#ui-right").length ? html.closest("#ui-right") : html;
+    const $nav = html?.closest ? html : $(html || "#ui-right");
+    const navigationRoot = html?.closest
+      ? $nav.closest("#ui-right").length
+        ? $nav.closest("#ui-right")
+        : $nav
+      : $("#ui-right");
     const targetContainer = navigationRoot.find(".tabs .flexcol").first();
     if (!targetContainer.length || hasExistingControl(targetContainer)) {
       return;

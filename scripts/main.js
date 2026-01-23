@@ -541,16 +541,16 @@ function hasCurrencyValues(currency) {
 }
 
 function getActorCurrency(actor) {
+  const inventoryCurrency = actor?.inventory?.currency;
+  if (hasCurrencyValues(inventoryCurrency)) {
+    return { currency: inventoryCurrency, path: "system.currency" };
+  }
   const directCurrency = actor?.system?.currency;
   if (hasCurrencyValues(directCurrency)) {
     return { currency: directCurrency, path: "system.currency" };
   }
   if (hasCurrencyValues(directCurrency?.value)) {
     return { currency: directCurrency.value, path: "system.currency.value" };
-  }
-  const partyCurrency = actor?.system?.party?.currency;
-  if (hasCurrencyValues(partyCurrency)) {
-    return { currency: partyCurrency, path: "system.party.currency" };
   }
   return { currency: null, path: null };
 }
@@ -617,7 +617,7 @@ async function deductCurrency(actor, costGold) {
     const actorName = actor?.name ?? "Unbekannter Actor";
     const message =
       `Kein unterstützter Currency-Pfad gefunden für ${actorName}. ` +
-      "Erwartet: system.currency, system.currency.value oder system.party.currency.";
+      "Erwartet: system.currency oder system.currency.value.";
     ui.notifications.warn(message);
     console.warn(message, actor);
     return { ok: false, reason: "missing-path" };

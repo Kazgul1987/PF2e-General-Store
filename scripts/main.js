@@ -1,8 +1,16 @@
 const MODULE_ID = "pf2e-general-store";
 const SHOP_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/shop-dialog.hbs`;
+const GM_FILTERS_TEMPLATE = `modules/${MODULE_ID}/templates/gm-filters.hbs`;
+const GM_FILTERS_SETTING = "gmFilters";
 const PACK_INDEX_CACHE = new Map();
 const ITEM_DESCRIPTION_CACHE = new Map();
 const TOOLTIP_DELAY = 250;
+const DEFAULT_GM_FILTERS = {
+  traits: [],
+  minLevel: null,
+  maxLevel: null,
+};
+let currentGmFilters = { ...DEFAULT_GM_FILTERS };
 
 function debounce(callback, delay = 250) {
   let timeoutId;
@@ -99,9 +107,70 @@ function normalizeTraits(traitsData) {
   return [];
 }
 
+function normalizeGmFilters(filters = {}) {
+  const traits = Array.isArray(filters.traits) ? filters.traits : [];
+  const normalizedTraits = traits
+    .filter((trait) => typeof trait === "string")
+    .map((trait) => trait.trim())
+    .filter((trait) => trait.length > 0)
+    .map((trait) => trait.toLowerCase());
+
+  const minLevel = Number.isFinite(filters.minLevel)
+    ? filters.minLevel
+    : Number.isFinite(Number(filters.minLevel))
+      ? Number(filters.minLevel)
+      : null;
+  const maxLevel = Number.isFinite(filters.maxLevel)
+    ? filters.maxLevel
+    : Number.isFinite(Number(filters.maxLevel))
+      ? Number(filters.maxLevel)
+      : null;
+
+  return {
+    traits: normalizedTraits,
+    minLevel,
+    maxLevel,
+  };
+}
+
 function normalizeLevel(levelData) {
   const levelValue = levelData?.value ?? levelData;
   return Number.isFinite(levelValue) ? levelValue : null;
+}
+
+function parseTraitsInput(value) {
+  if (!value) {
+    return [];
+  }
+  return value
+    .split(/[,;]+/)
+    .map((trait) => trait.trim())
+    .filter((trait) => trait.length > 0)
+    .map((trait) => trait.toLowerCase());
+}
+
+function formatTraitsInput(traits) {
+  if (!Array.isArray(traits)) {
+    return "";
+  }
+  return traits.join(", ");
+}
+
+function getCurrentGmFilters() {
+  return normalizeGmFilters(
+    game.settings?.get(MODULE_ID, GM_FILTERS_SETTING) ?? currentGmFilters
+  );
+}
+
+async function setCurrentGmFilters(filters) {
+  const normalized = normalizeGmFilters(filters);
+  currentGmFilters = normalized;
+  await game.settings.set(MODULE_ID, GM_FILTERS_SETTING, normalized);
+  game.socket?.emit(`module.${MODULE_ID}`, {
+    type: "gmFiltersUpdate",
+    filters: normalized,
+  });
+  refreshOpenStoreDialogs();
 }
 
 function isLegacyItem(entry) {
@@ -168,13 +237,58 @@ function renderSearchResults(results, listElement) {
   listElement.append(itemsHtml);
 }
 
-async function updateSearchResults(query, listElement) {
+function entryMatchesGmFilters(entry, filters) {
+  const normalizedFilters = normalizeGmFilters(filters);
+  if (normalizedFilters.traits.length) {
+    const entryTraits = normalizeTraits(entry.system?.traits).map((trait) =>
+      trait.toLowerCase()
+    );
+    const hasAllTraits = normalizedFilters.traits.every((trait) =>
+      entryTraits.includes(trait)
+    );
+    if (!hasAllTraits) {
+      return false;
+    }
+  }
+
+  const level = normalizeLevel(entry.system?.level);
+  if (normalizedFilters.minLevel !== null) {
+    if (level === null || level < normalizedFilters.minLevel) {
+      return false;
+    }
+  }
+  if (normalizedFilters.maxLevel !== null) {
+    if (level === null || level > normalizedFilters.maxLevel) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function refreshOpenStoreDialogs() {
+  const activeDialogs = document.querySelectorAll(".pf2e-general-store-dialog");
+  if (!activeDialogs.length) {
+    return;
+  }
+  const filters = getCurrentGmFilters();
+  activeDialogs.forEach((dialog) => {
+    const searchInput = dialog.querySelector('input[name="store-search"]');
+    const resultsList = dialog.querySelector(".store-results ul");
+    if (!searchInput || !resultsList) {
+      return;
+    }
+    void updateSearchResults(searchInput.value ?? "", $(resultsList), filters);
+  });
+}
+
+async function updateSearchResults(query, listElement, gmFiltersOverride) {
   const searchTerm = query.trim().toLowerCase();
   if (!searchTerm) {
     renderSearchResults([], listElement);
     return;
   }
 
+  const gmFilters = gmFiltersOverride ?? getCurrentGmFilters();
   const packs = getItemCompendiumPacks();
   const indices = await Promise.all(packs.map((pack) => getPackIndex(pack)));
 
@@ -186,6 +300,7 @@ async function updateSearchResults(query, listElement) {
       }))
     )
     .filter(({ entry }) => isEquipmentEntry(entry))
+    .filter(({ entry }) => entryMatchesGmFilters(entry, gmFilters))
     .filter(({ entry }) => entry.name?.toLowerCase().includes(searchTerm))
     .map(({ entry, pack }) => ({
       icon: entry.img ?? "icons/svg/item-bag.svg",
@@ -555,35 +670,60 @@ function getDefaultShopActor() {
 }
 
 function openGmMenu() {
-  const content = `
-    <p>General Store GM-Menü</p>
-    <p>Öffne den General Store für den aktuell ausgewählten Token oder deinen Charakter.</p>
-  `;
-
-  const dialog = new Dialog({
-    title: "General Store (GM)",
-    content,
-    buttons: {
-      open: {
-        label: "Store öffnen",
-        callback: () => {
-          const actor = getDefaultShopActor();
-          if (!actor) {
-            ui.notifications.warn("Bitte wähle einen Token oder Charakter aus.");
-            return false;
-          }
-          void openShopDialog(actor);
-          return true;
-        },
-      },
-      close: {
-        label: "Schließen",
-      },
-    },
-    default: "open",
+  const filters = getCurrentGmFilters();
+  const content = renderTemplate(GM_FILTERS_TEMPLATE, {
+    traitsInput: formatTraitsInput(filters.traits),
+    minLevel: Number.isFinite(filters.minLevel) ? filters.minLevel : "",
+    maxLevel: Number.isFinite(filters.maxLevel) ? filters.maxLevel : "",
   });
 
-  dialog.render(true);
+  content.then((htmlContent) => {
+    const dialog = new Dialog({
+      title: "General Store (GM)",
+      content: htmlContent,
+      buttons: {
+        save: {
+          label: "Filter speichern",
+          callback: (html) => {
+            const form = html[0]?.querySelector("form");
+            if (!form) {
+              return false;
+            }
+            const traitsValue = form.elements["gm-traits"]?.value ?? "";
+            const minValue = form.elements["min-level"]?.value ?? "";
+            const maxValue = form.elements["max-level"]?.value ?? "";
+            const minLevel = minValue === "" ? null : Number(minValue);
+            const maxLevel = maxValue === "" ? null : Number(maxValue);
+
+            void setCurrentGmFilters({
+              traits: parseTraitsInput(traitsValue),
+              minLevel: Number.isFinite(minLevel) ? minLevel : null,
+              maxLevel: Number.isFinite(maxLevel) ? maxLevel : null,
+            });
+            return true;
+          },
+        },
+        open: {
+          label: "Store öffnen",
+          callback: () => {
+            const actor = getDefaultShopActor();
+            if (!actor) {
+              ui.notifications.warn("Bitte wähle einen Token oder Charakter aus.");
+              return false;
+            }
+            void openShopDialog(actor);
+            return true;
+          },
+        },
+        close: {
+          label: "Schließen",
+        },
+      },
+      default: "save",
+    });
+
+    dialog.render(true);
+  });
 }
 
 function addActorSheetHeaderControl(app, html) {
@@ -642,5 +782,23 @@ export function registerPF2eGeneralStore() {
 }
 
 Hooks.once("init", () => {
+  game.settings.register(MODULE_ID, GM_FILTERS_SETTING, {
+    name: "General Store GM Filter",
+    scope: "world",
+    config: false,
+    type: Object,
+    default: DEFAULT_GM_FILTERS,
+  });
   registerPF2eGeneralStore();
+});
+
+Hooks.once("ready", () => {
+  currentGmFilters = getCurrentGmFilters();
+  game.socket?.on(`module.${MODULE_ID}`, (payload) => {
+    if (payload?.type !== "gmFiltersUpdate") {
+      return;
+    }
+    currentGmFilters = normalizeGmFilters(payload.filters ?? {});
+    refreshOpenStoreDialogs();
+  });
 });

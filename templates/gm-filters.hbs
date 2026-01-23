@@ -1,0 +1,38 @@
+<form class="pf2e-general-store-gm">
+  <p>General Store GM-Menü</p>
+  <p>Öffne den General Store für den aktuell ausgewählten Token oder deinen Charakter.</p>
+
+  <div class="form-group">
+    <label for="pf2e-general-store-traits">Traits (Mehrfachauswahl)</label>
+    <input
+      id="pf2e-general-store-traits"
+      type="text"
+      name="gm-traits"
+      placeholder="z.B. alchemical, consumable, fire"
+      value="{{traitsInput}}"
+    />
+    <p class="hint">Mehrere Traits mit Komma trennen.</p>
+  </div>
+
+  <div class="form-group">
+    <label for="pf2e-general-store-min-level">Min. Itemlevel</label>
+    <input
+      id="pf2e-general-store-min-level"
+      type="number"
+      name="min-level"
+      placeholder="Keine"
+      value="{{minLevel}}"
+    />
+  </div>
+
+  <div class="form-group">
+    <label for="pf2e-general-store-max-level">Max. Itemlevel</label>
+    <input
+      id="pf2e-general-store-max-level"
+      type="number"
+      name="max-level"
+      placeholder="Keine"
+      value="{{maxLevel}}"
+    />
+  </div>
+</form>

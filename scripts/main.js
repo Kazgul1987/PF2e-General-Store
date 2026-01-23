@@ -27,7 +27,11 @@ function getPackIndex(pack) {
           "img",
           "system.level",
           "system.price",
+          "system.publication",
+          "system.remaster",
+          "system.source",
           "system.traits",
+          "flags.pf2e.legacy",
           "type",
         ],
       })
@@ -100,6 +104,28 @@ function normalizeLevel(levelData) {
   return Number.isFinite(levelValue) ? levelValue : null;
 }
 
+function isLegacyItem(entry) {
+  const legacyFlag = entry?.flags?.pf2e?.legacy;
+  if (legacyFlag === true) {
+    return true;
+  }
+
+  const remasterFlag = entry?.system?.publication?.remaster ?? entry?.system?.remaster;
+  if (remasterFlag === true) {
+    return false;
+  }
+  if (remasterFlag === false) {
+    return true;
+  }
+
+  const source = entry?.system?.publication?.title ?? entry?.system?.source?.value ?? "";
+  if (typeof source === "string" && source.toLowerCase().includes("legacy")) {
+    return true;
+  }
+
+  return false;
+}
+
 function renderSearchResults(results, listElement) {
   listElement.empty();
   if (!results.length) {
@@ -123,6 +149,7 @@ function renderSearchResults(results, listElement) {
           <span class="store-result__details">
             <span class="store-result__name">${result.name}</span>
             <span class="store-result__level">Level ${result.level ?? "–"}</span>
+            ${result.isLegacy ? '<span class="store-result__legacy">Legacy</span>' : ""}
             ${
               result.traits?.length
                 ? `<span class="store-result__traits">${result.traits
@@ -166,6 +193,7 @@ async function updateSearchResults(query, listElement) {
       priceGold: getPriceInGold(entry),
       traits: normalizeTraits(entry.system?.traits),
       level: normalizeLevel(entry.system?.level),
+      isLegacy: isLegacyItem(entry),
       pack: pack.collection,
       itemId: entry._id,
     }));

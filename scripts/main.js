@@ -200,6 +200,7 @@ function normalizeBulkOrderState(state = {}) {
     acc[userId] = {
       name: data?.name ?? game.users?.get(userId)?.name ?? "Unbekannt",
       confirmed: Boolean(data?.confirmed),
+      needsReconfirm: Boolean(data?.needsReconfirm),
       items,
     };
     return acc;
@@ -403,6 +404,7 @@ function ensureBulkOrderPlayer(state, userId, userName) {
   players[userId] = {
     name: existing?.name ?? userName ?? "Unbekannt",
     confirmed: existing?.confirmed ?? false,
+    needsReconfirm: existing?.needsReconfirm ?? false,
     items: Array.isArray(existing?.items) ? [...existing.items] : [],
   };
   return { ...state, players };
@@ -449,6 +451,7 @@ async function handleBulkOrderAction(payload) {
     }
     const price = Number(data?.price) || 0;
     const name = data?.name ?? "Unbekanntes Item";
+    const wasConfirmed = player.confirmed;
     const existingItem = player.items.find(
       (item) => item.itemId === itemId && item.pack === pack
     );
@@ -458,6 +461,7 @@ async function handleBulkOrderAction(payload) {
       player.items.push({ itemId, pack, quantity: 1, price, name });
     }
     player.confirmed = false;
+    player.needsReconfirm = wasConfirmed || player.needsReconfirm;
     await setBulkOrderState({
       ...nextState,
       gmConfirmed: false,
@@ -472,10 +476,12 @@ async function handleBulkOrderAction(payload) {
     if (!itemId || !pack) {
       return;
     }
+    const wasConfirmed = player.confirmed;
     player.items = player.items.filter(
       (item) => !(item.itemId === itemId && item.pack === pack)
     );
     player.confirmed = false;
+    player.needsReconfirm = wasConfirmed || player.needsReconfirm;
     const updatedPlayers = { ...nextState.players, [userId]: player };
     if (!player.items.length) {
       delete updatedPlayers[userId];
@@ -493,6 +499,7 @@ async function handleBulkOrderAction(payload) {
       return;
     }
     player.confirmed = true;
+    player.needsReconfirm = false;
     await setBulkOrderState({
       ...nextState,
       players: { ...nextState.players, [userId]: player },
@@ -894,7 +901,14 @@ function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) 
 }
 
 function getPlayerOrder(state, userId) {
-  return state.players?.[userId] ?? { name: "Unbekannt", confirmed: false, items: [] };
+  return (
+    state.players?.[userId] ?? {
+      name: "Unbekannt",
+      confirmed: false,
+      needsReconfirm: false,
+      items: [],
+    }
+  );
 }
 
 function buildBulkOrderItemsHtml(items, allowRemove) {
@@ -907,6 +921,7 @@ function buildBulkOrderItemsHtml(items, allowRemove) {
         <li class="bulk-order__item">
           <span class="bulk-order__item-name">${item.name}</span>
           <span class="bulk-order__item-qty">x${item.quantity}</span>
+          <span class="bulk-order__item-unit">${formatGold(item.price)} gp</span>
           <span class="bulk-order__item-price">${formatGold(
             item.price * item.quantity
           )} gp</span>
@@ -917,6 +932,26 @@ function buildBulkOrderItemsHtml(items, allowRemove) {
                 }" data-item-id="${item.itemId}" aria-label="Item entfernen">✕</button>`
               : ""
           }
+        </li>
+      `
+    )
+    .join("");
+}
+
+function buildGmBulkOrderItemsHtml(items) {
+  if (!items.length) {
+    return '<li class="bulk-order__placeholder">Keine Items ausgewählt.</li>';
+  }
+  return items
+    .map(
+      (item) => `
+        <li class="bulk-order__gm-item">
+          <span class="bulk-order__gm-item-name">${item.name}</span>
+          <span class="bulk-order__gm-item-qty">x${item.quantity}</span>
+          <span class="bulk-order__gm-item-unit">${formatGold(item.price)} gp</span>
+          <span class="bulk-order__gm-item-total">${formatGold(
+            item.price * item.quantity
+          )} gp</span>
         </li>
       `
     )
@@ -944,7 +979,11 @@ function updateBulkOrderPanel(dialogElement) {
   );
   bulkSection.find(".bulk-order__items").html(buildBulkOrderItemsHtml(items, true));
   bulkSection.find(".bulk-order__total").text(`${formatGold(total)} gp`);
-  const statusText = player.confirmed ? "Bestätigt" : "Noch nicht bestätigt";
+  const statusText = player.confirmed
+    ? "Bestätigt"
+    : player.needsReconfirm
+      ? "Erneute Bestätigung erforderlich"
+      : "Noch nicht bestätigt";
   bulkSection.find(".bulk-order__status").text(statusText);
   const confirmButton = bulkSection.find(".bulk-order__confirm");
   confirmButton.prop("disabled", items.length === 0 || player.confirmed);
@@ -975,13 +1014,28 @@ function updateGmBulkOrderPanel(dialogElement) {
   const listHtml = players.length
     ? players
         .map(([userId, player]) => {
-          const itemCount = player.items?.length ?? 0;
-          const statusLabel = player.confirmed ? "Bestätigt" : "Offen";
+          const items = player.items ?? [];
+          const itemCount = items.length;
+          const statusLabel = player.confirmed
+            ? "Bestätigt"
+            : player.needsReconfirm
+              ? "Neu bestätigen"
+              : "Offen";
+          const total = items.reduce(
+            (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
+            0
+          );
           return `
             <li class="bulk-order__gm-player">
-              <span class="bulk-order__gm-name">${player.name}</span>
-              <span class="bulk-order__gm-items">${itemCount} Items</span>
-              <span class="bulk-order__gm-status">${statusLabel}</span>
+              <div class="bulk-order__gm-player-header">
+                <span class="bulk-order__gm-name">${player.name}</span>
+                <span class="bulk-order__gm-items">${itemCount} Items</span>
+                <span class="bulk-order__gm-status">${statusLabel}</span>
+                <span class="bulk-order__gm-player-total">${formatGold(total)} gp</span>
+              </div>
+              <ul class="bulk-order__gm-player-items">
+                ${buildGmBulkOrderItemsHtml(items)}
+              </ul>
             </li>
           `;
         })

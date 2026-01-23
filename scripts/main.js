@@ -253,6 +253,28 @@ function splitCopper(totalCopper) {
   return { pp, gp, sp, cp };
 }
 
+function formatCurrencyDisplay(currency) {
+  if (!currency) {
+    return null;
+  }
+  const totalCopper = getCurrencyInCopper(currency);
+  const { pp, gp, sp, cp } = splitCopper(totalCopper);
+  const parts = [];
+  if (pp) {
+    parts.push(`${pp} pp`);
+  }
+  if (gp) {
+    parts.push(`${gp} gp`);
+  }
+  if (sp) {
+    parts.push(`${sp} sp`);
+  }
+  if (cp || parts.length === 0) {
+    parts.push(`${cp} cp`);
+  }
+  return parts.join(" ");
+}
+
 function getPartyStashActor() {
   if (game.party) {
     return game.party;
@@ -332,6 +354,15 @@ async function handlePurchase({ actor, packCollection, itemId, name, priceGold, 
 }
 
 function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) {
+  const { currency: actorCurrency } = getActorCurrency(actor);
+  const actorCurrencyDisplay = formatCurrencyDisplay(actorCurrency);
+  const partyActor = getPartyStashActor();
+  const { currency: partyCurrency } = getActorCurrency(partyActor);
+  const partyCurrencyDisplay = partyActor ? formatCurrencyDisplay(partyCurrency) : null;
+  const partyAvailability = partyActor
+    ? partyCurrencyDisplay ?? "Nicht verfügbar"
+    : "Nicht verfügbar";
+  const actorAvailability = actorCurrencyDisplay ?? "Nicht verfügbar";
   const content = `
     <form class="pf2e-general-store-purchase">
       <p class="purchase-title">${name}</p>
@@ -343,12 +374,18 @@ function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) 
       <fieldset class="form-group">
         <legend>Zahlungsquelle</legend>
         <label class="store-option">
-          <input type="checkbox" name="payment-actor" />
-          <span>Gold vom Actor</span>
+          <span class="store-option__row">
+            <input type="checkbox" name="payment-actor" />
+            <span>Gold vom Actor</span>
+          </span>
+          <span class="store-option__availability">Verfügbar: ${actorAvailability}</span>
         </label>
         <label class="store-option">
-          <input type="checkbox" name="payment-party" />
-          <span>Party-Stash</span>
+          <span class="store-option__row">
+            <input type="checkbox" name="payment-party" />
+            <span>Party-Stash</span>
+          </span>
+          <span class="store-option__availability">Verfügbar: ${partyAvailability}</span>
         </label>
       </fieldset>
     </form>

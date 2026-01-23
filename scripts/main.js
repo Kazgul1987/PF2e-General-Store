@@ -26,6 +26,7 @@ function getPackIndex(pack) {
         fields: [
           "img",
           "system.price",
+          "system.traits",
           "type",
         ],
       })
@@ -78,6 +79,21 @@ function formatGold(value) {
   return Number.isFinite(value) ? value.toLocaleString() : "0";
 }
 
+function normalizeTraits(traitsData) {
+  if (!traitsData) {
+    return [];
+  }
+  if (Array.isArray(traitsData)) {
+    return traitsData.filter((trait) => typeof trait === "string" && trait.trim());
+  }
+  if (Array.isArray(traitsData?.value)) {
+    return traitsData.value.filter(
+      (trait) => typeof trait === "string" && trait.trim()
+    );
+  }
+  return [];
+}
+
 function renderSearchResults(results, listElement) {
   listElement.empty();
   if (!results.length) {
@@ -98,7 +114,16 @@ function renderSearchResults(results, listElement) {
           data-price="${result.priceGold}"
         >
           <img class="store-result__icon" src="${result.icon}" alt="" />
-          <span class="store-result__name">${result.name}</span>
+          <span class="store-result__details">
+            <span class="store-result__name">${result.name}</span>
+            ${
+              result.traits?.length
+                ? `<span class="store-result__traits">${result.traits
+                    .map((trait) => `<span class="store-result__trait">${trait}</span>`)
+                    .join("")}</span>`
+                : ""
+            }
+          </span>
           <span class="store-result__price">${formatGold(result.priceGold)} gp</span>
         </button>
       </li>
@@ -132,6 +157,7 @@ async function updateSearchResults(query, listElement) {
       icon: entry.img ?? "icons/svg/item-bag.svg",
       name: entry.name ?? "",
       priceGold: getPriceInGold(entry),
+      traits: normalizeTraits(entry.system?.traits),
       pack: pack.collection,
       itemId: entry._id,
     }));

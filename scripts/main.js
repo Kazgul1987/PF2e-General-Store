@@ -164,16 +164,23 @@ async function getCachedSpellIndexEntries() {
       const indices = await Promise.all(
         packs.map((pack) => getSpellPackIndex(pack))
       );
-      const entries = indices.flatMap((index, indexPosition) => {
+      const entryKeys = new Set();
+      const entries = [];
+      indices.forEach((index, indexPosition) => {
         const pack = packs[indexPosition];
-        return Array.from(index)
+        Array.from(index)
           .filter(
             (entry) => pack.documentName !== "Item" || entry.type === "spell"
           )
-          .map((entry) => ({
-            entry,
-            pack,
-          }));
+          .forEach((entry) => {
+            const entryKey =
+              entry.uuid ?? `${pack.collection}.${entry._id ?? ""}`;
+            if (!entryKey || entryKeys.has(entryKey)) {
+              return;
+            }
+            entryKeys.add(entryKey);
+            entries.push({ entry, pack });
+          });
       });
 
       SPELL_INDEX_CACHE.set("spells", entries);

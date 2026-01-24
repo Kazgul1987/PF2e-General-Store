@@ -6,7 +6,8 @@ const BULK_ORDER_SETTING = "bulkOrderState";
 const PACK_INDEX_CACHE = new Map();
 const ITEM_INDEX_CACHE = new Map();
 const ITEM_DESCRIPTION_CACHE = new Map();
-const TOOLTIP_DELAY = 250;
+const DEFAULT_DESCRIPTION_PLACEHOLDER =
+  '<p class="store-description__placeholder">Wähle ein Item aus, um die Beschreibung zu sehen.</p>';
 const DEFAULT_GM_FILTERS = {
   traits: [],
   minLevel: null,
@@ -344,7 +345,7 @@ function renderSearchResults(results, listElement) {
   const itemsHtml = results
     .map(
       (result) => `
-      <li class="store-result">
+      <li class="store-result" data-item-id="${result.itemId}">
         <button
           class="store-result__button"
           type="button"
@@ -381,6 +382,20 @@ function renderSearchResults(results, listElement) {
     .join("");
 
   listElement.append(itemsHtml);
+}
+
+function getDescriptionContainer(listElement) {
+  const dialog = listElement.closest(".pf2e-general-store-dialog");
+  return dialog.find(".store-description__content");
+}
+
+function resetResultSelection(listElement) {
+  listElement.find(".store-result__button.selected").removeClass("selected");
+  const descriptionContainer = getDescriptionContainer(listElement);
+  if (descriptionContainer.length) {
+    descriptionContainer.data("activeDescriptionKey", null);
+    descriptionContainer.html(DEFAULT_DESCRIPTION_PLACEHOLDER);
+  }
 }
 
 function entryMatchesGmFilters(entry, filters) {
@@ -445,6 +460,7 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
   const searchTerm = query.trim().toLowerCase();
   if (!searchTerm) {
     renderSearchResults([], listElement);
+    resetResultSelection(listElement);
     return;
   }
 
@@ -468,6 +484,7 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
     }));
 
   renderSearchResults(results, listElement);
+  resetResultSelection(listElement);
 }
 
 function ensureBulkOrderPlayer(state, userId, userName) {
@@ -582,14 +599,6 @@ async function handleBulkOrderAction(payload) {
   if (action === "gmConfirm") {
     await confirmBulkOrder(nextState);
   }
-}
-
-function positionTooltip(tooltip, event) {
-  const offset = 16;
-  tooltip.css({
-    left: event.pageX + offset,
-    top: event.pageY + offset,
-  });
 }
 
 function getCurrencyInCopper(currency = {}) {
@@ -1127,53 +1136,7 @@ function updateGmBulkOrderPanel(dialogElement) {
 }
 
 function setupResultInteractions(resultsList) {
-  const tooltip = $('<div class="pf2e-general-store-tooltip" role="tooltip"></div>')
-    .appendTo(document.body)
-    .hide();
-  let activeKey = null;
-  let tooltipTimeout = null;
-
-  const showTooltip = async (event, target) => {
-    const pack = target.data("pack");
-    const itemId = target.data("itemId");
-    if (!pack || !itemId) {
-      return;
-    }
-    const cacheKey = `${pack}.${itemId}`;
-    activeKey = cacheKey;
-    tooltip.html('<span class="tooltip-loading">Lade Beschreibung...</span>');
-    tooltip.show();
-    positionTooltip(tooltip, event);
-    const description = await getItemDescription(pack, itemId);
-    if (activeKey !== cacheKey) {
-      return;
-    }
-    tooltip.html(`<div class="tooltip-content">${description}</div>`);
-    positionTooltip(tooltip, event);
-  };
-
-  resultsList.on("mouseenter", ".store-result__button", (event) => {
-    const target = $(event.currentTarget);
-    tooltipTimeout = setTimeout(() => {
-      void showTooltip(event, target);
-    }, TOOLTIP_DELAY);
-  });
-
-  resultsList.on("mousemove", ".store-result__button", (event) => {
-    if (!tooltip.is(":visible")) {
-      return;
-    }
-    positionTooltip(tooltip, event);
-  });
-
-  resultsList.on("mouseleave", ".store-result__button", () => {
-    if (tooltipTimeout) {
-      clearTimeout(tooltipTimeout);
-      tooltipTimeout = null;
-    }
-    activeKey = null;
-    tooltip.hide();
-  });
+  const descriptionContainer = getDescriptionContainer(resultsList);
 
   resultsList.on("click", ".store-result__button", (event) => {
     const target = $(event.currentTarget);
@@ -1181,6 +1144,26 @@ function setupResultInteractions(resultsList) {
     const priceGold = Number(target.data("price")) || 0;
     const packCollection = target.data("pack");
     const itemId = target.data("itemId");
+    resultsList.find(".store-result__button.selected").removeClass("selected");
+    target.addClass("selected");
+    if (descriptionContainer.length) {
+      descriptionContainer.html(
+        '<p class="store-description__placeholder">Lade Beschreibung...</p>'
+      );
+      if (packCollection && itemId) {
+        const cacheKey = `${packCollection}.${itemId}`;
+        descriptionContainer.data("activeDescriptionKey", cacheKey);
+        void getItemDescription(packCollection, itemId).then((description) => {
+          if (descriptionContainer.data("activeDescriptionKey") !== cacheKey) {
+            return;
+          }
+          descriptionContainer.html(description || DEFAULT_DESCRIPTION_PLACEHOLDER);
+        });
+      } else {
+        descriptionContainer.data("activeDescriptionKey", null);
+        descriptionContainer.html(DEFAULT_DESCRIPTION_PLACEHOLDER);
+      }
+    }
     if (isBulkOrderActive()) {
       requestBulkOrderAction("addItem", {
         itemId,

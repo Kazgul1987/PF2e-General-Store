@@ -1066,7 +1066,9 @@ function buildCartDialogItemsHtml(items) {
           <span class="cart-dialog__total">${formatGold(
             item.price * item.quantity
           )} gp</span>
-          <button class="cart-dialog__remove" type="button">Entfernen</button>
+          <button class="cart-dialog__remove" type="button" aria-label="Item entfernen">
+            ×
+          </button>
         </li>
       `
     )

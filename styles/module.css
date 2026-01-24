@@ -297,7 +297,9 @@
   align-items: center;
   display: grid;
   gap: 0.5rem;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  padding-right: 1.75rem;
+  position: relative;
 }
 
 .pf2e-general-store-cart-dialog .cart-dialog__item--bulk {
@@ -309,6 +311,19 @@
   display: grid;
   gap: 0.5rem;
   grid-template-columns: 32px minmax(0, 1fr);
+}
+
+.pf2e-general-store-cart-dialog .cart-dialog__remove {
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.1rem;
+  position: absolute;
+  right: 0.25rem;
+  top: 0.25rem;
 }
 
 .pf2e-general-store-cart-dialog .cart-dialog__total {

@@ -210,6 +210,14 @@ function getPriceInGold(entry) {
   return 0;
 }
 
+function getSpellConsumablePrice(consumableSource) {
+  if (!consumableSource) {
+    return 0;
+  }
+  // TODO: Replace with a centralized spell consumable pricing rule once defined.
+  return getPriceInGold(consumableSource);
+}
+
 function formatGold(value) {
   return Number.isFinite(value) ? value.toLocaleString() : "0";
 }
@@ -1287,7 +1295,7 @@ function buildCartDialogItemsHtml(items) {
           ${buildCartItemDetailsHtml(item)}
           <input class="cart-dialog__qty" type="number" min="1" value="${item.quantity}" />
           <span class="cart-dialog__total">${formatGold(
-            item.price * item.quantity
+            getCartItemPrice(item) * item.quantity
           )} gp</span>
           <button class="cart-dialog__remove" type="button" aria-label="Item entfernen">
             ×
@@ -1374,6 +1382,19 @@ async function buildCartItemFromWishlistItem(item) {
   };
 }
 
+function getCartItemPrice(item) {
+  if (!item) {
+    return 0;
+  }
+  if (item.entryType === "spell") {
+    const consumablePrice = getSpellConsumablePrice(item.consumableSource);
+    if (Number.isFinite(consumablePrice)) {
+      return consumablePrice;
+    }
+  }
+  return Number(item.price) || 0;
+}
+
 async function handleCartCheckout({ actor, items, useActor, useParty }) {
   if (!actor) {
     ui.notifications.error("Kein gültiger Actor ausgewählt.");
@@ -1428,7 +1449,7 @@ async function handleCartCheckout({ actor, items, useActor, useParty }) {
   }
 
   const totalPrice = items.reduce(
-    (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
+    (sum, item) => sum + getCartItemPrice(item) * (Number(item.quantity) || 0),
     0
   );
   const paymentResult = await deductCurrency(paymentActor, totalPrice);
@@ -1687,7 +1708,7 @@ async function openShopDialog(actor) {
       Array.from(cartItems.entries()).map(([key, item]) => ({ key, ...item }));
     const getCartTotal = () =>
       getCartItemsArray().reduce(
-        (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
+        (sum, item) => sum + getCartItemPrice(item) * (Number(item.quantity) || 0),
         0
       );
     const updateCartSummary = () => {
@@ -1742,6 +1763,10 @@ async function openShopDialog(actor) {
           return;
         }
       }
+      const computedPrice =
+        entryType === "spell"
+          ? getSpellConsumablePrice(spellDetails?.consumableSource)
+          : priceGold;
       const key =
         entryType === "spell"
           ? `${packCollection}.${itemId}.${spellDetails?.consumableType ?? "spell"}.${spellDetails?.rank ?? "rank"}`
@@ -1765,7 +1790,7 @@ async function openShopDialog(actor) {
           consumableSource: spellDetails?.consumableSource ?? null,
           consumableType: spellDetails?.consumableType ?? null,
           rank: spellDetails?.rank ?? null,
-          price: priceGold,
+          price: computedPrice,
           quantity,
         });
       }

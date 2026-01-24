@@ -5,6 +5,7 @@ const WISHLIST_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/wishlist-dialog
 const GM_FILTERS_SETTING = "gmFilters";
 const SHOW_STORE_BUTTON_SETTING = "showStoreButtonForPlayers";
 const WISHLIST_SETTING = "wishlistState";
+const WISHLIST_CLIENT_SETTING = "wishlistStateClient";
 const PACK_INDEX_CACHE = new Map();
 const ITEM_INDEX_CACHE = new Map();
 const ITEM_DESCRIPTION_CACHE = new Map();
@@ -22,8 +23,10 @@ const DEFAULT_WISHLIST_STATE = {
 };
 let currentGmFilters = { ...DEFAULT_GM_FILTERS };
 let currentWishlistState = { ...DEFAULT_WISHLIST_STATE };
+let currentPlayerWishlistState = { ...DEFAULT_WISHLIST_STATE };
 const pendingWishlistMutationRequests = new Map();
 const WISHLIST_MUTATION_REQUEST_TIMEOUT_MS = 5000;
+const WISHLIST_OPTIONS_FLAG = "__wishlistOptions";
 
 function debounce(callback, delay = 250) {
   let timeoutId;
@@ -311,17 +314,32 @@ function buildWishlistDialogItems(state, currentUserId) {
   });
 }
 
-function getWishlistState() {
+function isWishlistEmpty(state) {
+  const wishlistState = normalizeWishlistState(state);
+  return Object.keys(wishlistState.items).length === 0;
+}
+
+function getWorldWishlistState() {
   return normalizeWishlistState(
     game.settings?.get(MODULE_ID, WISHLIST_SETTING) ?? currentWishlistState
   );
 }
 
-async function setWishlistState(state) {
-  const normalized = normalizeWishlistState(state);
-  if (!game.user?.isGM) {
-    return normalized;
+function getPlayerWishlistState() {
+  return normalizeWishlistState(
+    game.settings?.get(MODULE_ID, WISHLIST_CLIENT_SETTING) ?? currentPlayerWishlistState
+  );
+}
+
+function getWishlistState() {
+  if (game.user?.isGM) {
+    return getWorldWishlistState();
   }
+  return getPlayerWishlistState();
+}
+
+async function setWorldWishlistState(state) {
+  const normalized = normalizeWishlistState(state);
   currentWishlistState = normalized;
   await game.settings.set(MODULE_ID, WISHLIST_SETTING, normalized);
   game.socket?.emit(`module.${MODULE_ID}`, {
@@ -332,9 +350,42 @@ async function setWishlistState(state) {
   return normalized;
 }
 
-function isWishlistEmpty(state) {
-  const wishlistState = normalizeWishlistState(state);
-  return Object.keys(wishlistState.items).length === 0;
+async function setPlayerWishlistState(state) {
+  const normalized = normalizeWishlistState(state);
+  currentPlayerWishlistState = normalized;
+  await game.settings.set(MODULE_ID, WISHLIST_CLIENT_SETTING, normalized);
+  return normalized;
+}
+
+async function setWishlistState(state) {
+  if (game.user?.isGM) {
+    return setWorldWishlistState(state);
+  }
+  return setPlayerWishlistState(state);
+}
+
+function extractWishlistOptions(args) {
+  const lastArg = args.at(-1);
+  if (!lastArg || typeof lastArg !== "object" || Array.isArray(lastArg)) {
+    return { syncWithGm: false };
+  }
+  if (lastArg[WISHLIST_OPTIONS_FLAG] !== true) {
+    return { syncWithGm: false };
+  }
+  args.pop();
+  return { syncWithGm: Boolean(lastArg.syncWithGm) };
+}
+
+async function migratePlayerWishlistState() {
+  if (game.user?.isGM) {
+    return getPlayerWishlistState();
+  }
+  const playerState = getPlayerWishlistState();
+  const worldState = getWorldWishlistState();
+  if (!isWishlistEmpty(playerState) || isWishlistEmpty(worldState)) {
+    return playerState;
+  }
+  return setPlayerWishlistState(worldState);
 }
 
 function addWishlistItem(state, item, player) {
@@ -513,10 +564,20 @@ function requestWishlistMutation(type, args) {
 }
 
 async function applyWishlistMutation(type, ...args) {
+  const { syncWithGm } = extractWishlistOptions(args);
   if (game.user?.isGM) {
     return applyWishlistMutationAsGm(type, ...args);
   }
-  return requestWishlistMutation(type, args);
+  const mutation = getWishlistMutation(type);
+  if (!mutation) {
+    return null;
+  }
+  const result = mutation(getWishlistState(), ...args);
+  await setPlayerWishlistState(result.state);
+  if (syncWithGm) {
+    void requestWishlistMutation(type, args);
+  }
+  return result;
 }
 
 function normalizeLevel(levelData) {
@@ -1952,13 +2013,22 @@ Hooks.once("init", () => {
     type: Object,
     default: DEFAULT_WISHLIST_STATE,
   });
+  game.settings.register(MODULE_ID, WISHLIST_CLIENT_SETTING, {
+    name: "General Store Wishlist (Spieler)",
+    scope: "client",
+    config: false,
+    type: Object,
+    default: DEFAULT_WISHLIST_STATE,
+  });
   invalidateCompendiumCaches();
   registerPF2eGeneralStore();
 });
 
 Hooks.once("ready", () => {
   currentGmFilters = getCurrentGmFilters();
-  currentWishlistState = getWishlistState();
+  currentWishlistState = getWorldWishlistState();
+  currentPlayerWishlistState = getPlayerWishlistState();
+  void migratePlayerWishlistState();
   Hooks.on("updateCompendium", invalidateCompendiumCaches);
   Hooks.on("createCompendium", invalidateCompendiumCaches);
   Hooks.on("deleteCompendium", invalidateCompendiumCaches);

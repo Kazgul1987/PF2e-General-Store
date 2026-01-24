@@ -1416,6 +1416,10 @@ function getCartItemPrice(item) {
   if (!item) {
     return 0;
   }
+  const storedPrice = Number(item.price);
+  if (Number.isFinite(storedPrice) && storedPrice > 0) {
+    return storedPrice;
+  }
   if (item.entryType === "spell") {
     const consumablePrice = getSpellConsumablePrice({
       type: item.consumableType,
@@ -1623,6 +1627,9 @@ function extractSpellConsumableResult(result) {
     return null;
   }
 
+  const submitData =
+    result.submitData ?? result.formData ?? result.data ?? result.submittedData ?? null;
+
   const consumableSource =
     result.consumableSource ??
     result.source ??
@@ -1638,6 +1645,8 @@ function extractSpellConsumableResult(result) {
   }
 
   const consumableType =
+    submitData?.consumableType ??
+    submitData?.type ??
     result.consumableType ??
     result.type ??
     result.consumable?.type ??
@@ -1645,12 +1654,17 @@ function extractSpellConsumableResult(result) {
     null;
 
   const rank =
+    submitData?.rank ??
+    submitData?.spellRank ??
+    submitData?.level ??
     result.rank ??
     result.spellRank ??
     result.level ??
     consumableSource.system?.rank ??
     consumableSource.system?.level ??
     null;
+
+  const price = getSpellConsumablePrice({ type: consumableType, rank });
 
   const consumableImg =
     result.img ?? result.consumable?.img ?? result.item?.img ?? consumableSource.img ?? null;
@@ -1659,6 +1673,7 @@ function extractSpellConsumableResult(result) {
     consumableSource,
     consumableType,
     rank,
+    price,
     consumableImg,
   };
 }
@@ -1797,12 +1812,7 @@ async function openShopDialog(actor) {
         }
       }
       const computedPrice =
-        entryType === "spell"
-          ? getSpellConsumablePrice({
-              type: spellDetails?.consumableType,
-              rank: spellDetails?.rank,
-            })
-          : priceGold;
+        entryType === "spell" ? Number(spellDetails?.price) || 0 : priceGold;
       const key =
         entryType === "spell"
           ? `${packCollection}.${itemId}.${spellDetails?.consumableType ?? "spell"}.${spellDetails?.rank ?? "rank"}`

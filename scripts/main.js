@@ -958,6 +958,8 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
   const hasItemFilter = itemFilter.length ? itemFilter.prop("checked") : false;
   const showSpells = hasSpellFilter || (!hasSpellFilter && !hasItemFilter);
   const showItems = hasItemFilter || (!hasSpellFilter && !hasItemFilter);
+  const noSpellPacksAvailable =
+    hasSpellFilter && getSpellCompendiumPacks().length === 0;
 
   const gmFilters = gmFiltersOverride ?? getCurrentGmFilters();
   const itemEntriesPromise = showItems
@@ -1025,9 +1027,16 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
   resetResultSelection(listElement);
   updateSearchHint(
     listElement,
-    isTruncated
-      ? `Zeige erste ${MAX_SEARCH_RESULTS} Treffer. Bitte Suche weiter eingrenzen.`
-      : ""
+    [
+      noSpellPacksAvailable
+        ? "Keine Spell-Compendien verfügbar/zugänglich."
+        : null,
+      isTruncated
+        ? `Zeige erste ${MAX_SEARCH_RESULTS} Treffer. Bitte Suche weiter eingrenzen.`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(" ")
   );
 }
 

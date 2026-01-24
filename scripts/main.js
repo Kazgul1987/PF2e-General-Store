@@ -448,12 +448,21 @@ function moveWishlistPlayerToCart(state, key, userId, quantity) {
   return { state: wishlistState, total: calculateWishlistTotal(wishlistState), moved };
 }
 
+function removePlayerFromWishlist(state, key, userId, quantity) {
+  const result = moveWishlistPlayerToCart(state, key, userId, quantity);
+  if (!result) {
+    return result;
+  }
+  return { state: result.state, total: result.total, removed: result.moved };
+}
+
 const WISHLIST_MUTATIONS = {
   addItem: addWishlistItem,
   removeItem: removeWishlistItem,
   setQuantity: setWishlistItemQuantity,
   moveToCart: moveWishlistItemToCart,
   movePlayerToCart: moveWishlistPlayerToCart,
+  removePlayerFromWishlist,
 };
 
 function getWishlistMutation(type) {
@@ -1584,6 +1593,27 @@ async function openShopDialog(actor) {
         partyGold: partyAvailability,
         totalValue,
       });
+      const removeSelectedFromWishlist = async (dialogHtml) => {
+        const selections = dialogHtml.find(".wishlist-dialog__select-input:checked");
+        if (!selections.length) {
+          ui.notifications.warn("Bitte wähle mindestens ein Item aus.");
+          return false;
+        }
+        for (const selection of selections) {
+          const key = selection.dataset.itemKey;
+          const quantity = Number(selection.dataset.quantity) || 0;
+          if (!key || quantity <= 0) {
+            continue;
+          }
+          await applyWishlistMutation(
+            "removePlayerFromWishlist",
+            key,
+            currentUserId,
+            quantity
+          );
+        }
+        return true;
+      };
       const dialog = new Dialog({
         title: "Wunschliste",
         content,
@@ -1641,6 +1671,15 @@ async function openShopDialog(actor) {
       });
 
       dialog.render(true);
+
+      Hooks.once("renderDialog", (app, dialogHtml) => {
+        if (app !== dialog) {
+          return;
+        }
+        dialogHtml.on("click", ".wishlist-dialog__remove", () => {
+          void removeSelectedFromWishlist(dialogHtml);
+        });
+      });
     };
 
     const searchInput = html.find('input[name="store-search"]');

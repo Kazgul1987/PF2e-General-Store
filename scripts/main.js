@@ -295,7 +295,7 @@ async function setBulkOrderState(nextState) {
     type: "bulkOrderUpdate",
     state: normalized,
   });
-  refreshBulkOrderUi();
+  void refreshBulkOrderUi();
 }
 
 function isBulkOrderActive() {
@@ -344,7 +344,9 @@ function renderSearchResults(results, listElement) {
 
   const itemsHtml = results
     .map(
-      (result) => `
+      (result) => {
+        const traitsValue = (result.traits ?? []).join("|");
+        return `
       <li class="store-result" data-item-id="${result.itemId}">
         <button
           class="store-result__button"
@@ -353,6 +355,11 @@ function renderSearchResults(results, listElement) {
           data-item-id="${result.itemId}"
           data-name="${result.name}"
           data-price="${result.priceGold}"
+          data-icon="${result.icon}"
+          data-level="${result.level ?? ""}"
+          data-rarity="${result.rarity ?? ""}"
+          data-legacy="${result.isLegacy ? "true" : "false"}"
+          data-traits="${traitsValue}"
         >
           <img class="store-result__icon" src="${result.icon}" alt="" />
           <span class="store-result__details">
@@ -377,7 +384,8 @@ function renderSearchResults(results, listElement) {
           <span class="store-result__price">${formatGold(result.priceGold)} gp</span>
         </button>
       </li>
-    `
+    `;
+      }
     )
     .join("");
 
@@ -448,7 +456,7 @@ function refreshOpenStoreDialogs() {
   });
 }
 
-function refreshBulkOrderUi() {
+async function refreshBulkOrderUi() {
   const dialogs = document.querySelectorAll(".pf2e-general-store-dialog");
   dialogs.forEach((dialog) => updateBulkOrderPanel($(dialog)));
 
@@ -458,7 +466,8 @@ function refreshBulkOrderUi() {
   const cartDialogs = document.querySelectorAll(
     '.pf2e-general-store-cart-dialog[data-bulk-mode="true"]'
   );
-  cartDialogs.forEach((dialog) => {
+  await Promise.all(
+    Array.from(cartDialogs).map(async (dialog) => {
     const listElement = dialog.querySelector(".cart-dialog__items");
     const totalElement = dialog.querySelector("[data-cart-dialog-total]");
     const appElement = dialog.closest(".app");
@@ -474,11 +483,12 @@ function refreshBulkOrderUi() {
       return;
     }
     const items = getBulkCartDialogItems(state);
-    listElement.innerHTML = buildBulkCartDialogItemsHtml(items);
+    listElement.innerHTML = await buildBulkCartDialogItemsHtml(items);
     if (totalElement) {
       totalElement.textContent = `${formatGold(state.totalPrice)} gp`;
     }
-  });
+    })
+  );
 }
 
 async function updateSearchResults(query, listElement, gmFiltersOverride) {
@@ -1011,6 +1021,37 @@ function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) 
   dialog.render(true);
 }
 
+function buildCartItemDetailsHtml(item) {
+  const traits = Array.isArray(item.traits) ? item.traits : [];
+  const levelLabel = item.level ?? "–";
+  const legacyHtml = item.isLegacy
+    ? '<span class="store-result__legacy">Legacy</span>'
+    : "";
+  const rarityHtml = item.rarity
+    ? `<span class="store-result__rarity store-result__rarity--${item.rarity}">${formatRarityLabel(
+        item.rarity
+      )}</span>`
+    : "";
+  const traitsHtml = traits.length
+    ? `<span class="store-result__traits">${traits
+        .map((trait) => `<span class="store-result__trait">${trait}</span>`)
+        .join("")}</span>`
+    : "";
+  const icon = item.icon ?? "icons/svg/item-bag.svg";
+  return `
+    <div class="cart-dialog__item-info">
+      <img class="store-result__icon" src="${icon}" alt="" />
+      <span class="store-result__details">
+        <span class="store-result__name">${item.name}</span>
+        <span class="store-result__level">Level ${levelLabel}</span>
+        ${legacyHtml}
+        ${rarityHtml}
+        ${traitsHtml}
+      </span>
+    </div>
+  `;
+}
+
 function buildCartDialogItemsHtml(items) {
   if (!items.length) {
     return '<li class="cart-dialog__placeholder">Keine Items im Warenkorb.</li>';
@@ -1019,7 +1060,7 @@ function buildCartDialogItemsHtml(items) {
     .map(
       (item) => `
         <li class="cart-dialog__item" data-item-key="${item.key}">
-          <span class="cart-dialog__name">${item.name}</span>
+          ${buildCartItemDetailsHtml(item)}
           <input class="cart-dialog__qty" type="number" min="1" value="${item.quantity}" />
           <span class="cart-dialog__total">${formatGold(
             item.price * item.quantity
@@ -1079,17 +1120,58 @@ function getBulkCartDialogItems(state) {
   return Array.from(itemsMap.values());
 }
 
-function buildBulkCartDialogItemsHtml(items) {
+async function resolveBulkCartItemDisplay(item) {
+  const pack = game.packs.get(item.pack);
+  if (!pack) {
+    return {
+      icon: "icons/svg/item-bag.svg",
+      name: item.name,
+      level: null,
+      rarity: null,
+      traits: [],
+      isLegacy: false,
+    };
+  }
+  const index = await getPackIndex(pack);
+  const entry = index?.get ? index.get(item.itemId) : null;
+  if (!entry) {
+    return {
+      icon: "icons/svg/item-bag.svg",
+      name: item.name,
+      level: null,
+      rarity: null,
+      traits: [],
+      isLegacy: false,
+    };
+  }
+  return {
+    icon: entry.img ?? "icons/svg/item-bag.svg",
+    name: entry.name ?? item.name,
+    level: normalizeLevel(entry.system?.level),
+    rarity: normalizeRarity(entry.system?.traits?.rarity),
+    traits: normalizeTraits(entry.system?.traits),
+    isLegacy: isLegacyItem(entry),
+  };
+}
+
+async function buildBulkCartDialogItemsHtml(items) {
   if (!items.length) {
     return '<li class="cart-dialog__placeholder">Keine Items im Warenkorb.</li>';
   }
   const currentUserId = game.user?.id;
-  return items
-    .map(
-      (item) => `
+  const resolvedItems = await Promise.all(
+    items.map(async (item) => ({
+      item,
+      display: await resolveBulkCartItemDisplay(item),
+    }))
+  );
+  return resolvedItems
+    .map(({ item, display }) => {
+      const displayData = { ...item, ...display };
+      return `
         <li class="cart-dialog__item cart-dialog__item--bulk" data-item-key="${item.key}">
           <div class="cart-dialog__item-main">
-            <span class="cart-dialog__name">${item.name}</span>
+            ${buildCartItemDetailsHtml(displayData)}
             <ul class="cart-dialog__players">
               ${item.players
                 .map(
@@ -1114,8 +1196,8 @@ function buildBulkCartDialogItemsHtml(items) {
             item.price * item.quantity
           )} gp</span>
         </li>
-      `
-    )
+      `;
+    })
     .join("");
 }
 
@@ -1574,6 +1656,16 @@ async function openShopDialog(actor) {
       const priceGold = Number(selected.data("price")) || 0;
       const packCollection = selected.data("pack");
       const itemId = selected.data("itemId");
+      const icon = selected.data("icon") ?? "icons/svg/item-bag.svg";
+      const levelValue = selected.data("level");
+      const level = Number.isFinite(Number(levelValue)) ? Number(levelValue) : null;
+      const rarity = selected.data("rarity") || null;
+      const isLegacy = Boolean(selected.data("legacy"));
+      const traitsValue = selected.data("traits");
+      const traits =
+        typeof traitsValue === "string" && traitsValue.length
+          ? traitsValue.split("|").filter((trait) => trait)
+          : [];
       if (!packCollection || !itemId) {
         ui.notifications.warn("Kein gültiges Item ausgewählt.");
         return;
@@ -1591,13 +1683,18 @@ async function openShopDialog(actor) {
           itemId,
           pack: packCollection,
           name,
+          icon,
+          traits,
+          rarity,
+          level,
+          isLegacy,
           price: priceGold,
           quantity,
         });
       }
       updateCartSummary();
     };
-    const openCartDialog = () => {
+    const openCartDialog = async () => {
       const { currency: actorCurrency } = getActorCurrency(actor);
       const actorAvailability = formatCurrencyInGold(actorCurrency) ?? "Nicht verfügbar";
       const partyActor = getPartyStashActor();
@@ -1612,6 +1709,9 @@ async function openShopDialog(actor) {
       const bulkTotal = bulkActive ? bulkState.totalPrice : 0;
       const bulkAllConfirmed =
         bulkActive && bulkState ? areAllBulkOrdersConfirmed(bulkState) : false;
+      const bulkItemsHtml = bulkActive
+        ? await buildBulkCartDialogItemsHtml(bulkItems)
+        : null;
       const dialog = new Dialog({
         title: "Einkaufskorb",
         content: buildCartDialogContent({
@@ -1621,7 +1721,7 @@ async function openShopDialog(actor) {
           items: bulkActive ? bulkItems : getCartItemsArray(),
           total: bulkActive ? bulkTotal : getCartTotal(),
           isBulkOrder: bulkActive,
-          itemsHtml: bulkActive ? buildBulkCartDialogItemsHtml(bulkItems) : null,
+          itemsHtml: bulkItemsHtml,
         }),
         buttons: bulkActive
           ? {
@@ -1679,11 +1779,11 @@ async function openShopDialog(actor) {
           checkoutButton.prop("disabled", !bulkAllConfirmed);
         }
         const listElement = dialogHtml.find(".cart-dialog__items");
-        const renderCartDialogList = () => {
+        const renderCartDialogList = async () => {
           if (bulkActive) {
             const state = getBulkOrderState();
             const items = getBulkCartDialogItems(state);
-            listElement.html(buildBulkCartDialogItemsHtml(items));
+            listElement.html(await buildBulkCartDialogItemsHtml(items));
             dialogHtml
               .find("[data-cart-dialog-total]")
               .text(`${formatGold(state.totalPrice)} gp`);
@@ -1715,7 +1815,7 @@ async function openShopDialog(actor) {
           }
           cartItems.delete(key);
           updateCartSummary();
-          renderCartDialogList();
+          void renderCartDialogList();
         });
 
         dialogHtml.on("change", ".cart-dialog__qty", (event) => {
@@ -1733,7 +1833,7 @@ async function openShopDialog(actor) {
           item.quantity = quantity;
           cartItems.set(key, item);
           updateCartSummary();
-          renderCartDialogList();
+          void renderCartDialogList();
         });
       });
     };
@@ -1755,7 +1855,7 @@ async function openShopDialog(actor) {
       void addSelectedItemToCart();
     });
     html.on("click", ".store-cart__view", () => {
-      openCartDialog();
+      void openCartDialog();
     });
 
     html.on("click", ".bulk-order__confirm", () => {
@@ -2021,7 +2121,7 @@ Hooks.once("ready", () => {
     }
     if (payload?.type === "bulkOrderUpdate") {
       currentBulkOrder = normalizeBulkOrderState(payload.state ?? {});
-      refreshBulkOrderUi();
+      void refreshBulkOrderUi();
       return;
     }
     if (payload?.type === "bulkOrderAction") {

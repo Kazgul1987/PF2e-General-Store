@@ -7,6 +7,7 @@ const SHOW_STORE_BUTTON_SETTING = "showStoreButtonForPlayers";
 const PACK_INDEX_CACHE = new Map();
 const ITEM_INDEX_CACHE = new Map();
 const ITEM_DESCRIPTION_CACHE = new Map();
+let itemIndexBuildPromise = null;
 const DEFAULT_DESCRIPTION_PLACEHOLDER =
   '<p class="store-description__placeholder">Wähle ein Item aus, um die Beschreibung zu sehen.</p>';
 const DEFAULT_GM_FILTERS = {
@@ -64,18 +65,29 @@ async function getCachedItemIndexEntries() {
   if (ITEM_INDEX_CACHE.has("items")) {
     return ITEM_INDEX_CACHE.get("items");
   }
+  if (itemIndexBuildPromise) {
+    return itemIndexBuildPromise;
+  }
 
-  const packs = getItemCompendiumPacks();
-  const indices = await Promise.all(packs.map((pack) => getPackIndex(pack)));
-  const entries = indices.flatMap((index, indexPosition) =>
-    Array.from(index).map((entry) => ({
-      entry,
-      pack: packs[indexPosition],
-    }))
-  );
+  itemIndexBuildPromise = (async () => {
+    try {
+      const packs = getItemCompendiumPacks();
+      const indices = await Promise.all(packs.map((pack) => getPackIndex(pack)));
+      const entries = indices.flatMap((index, indexPosition) =>
+        Array.from(index).map((entry) => ({
+          entry,
+          pack: packs[indexPosition],
+        }))
+      );
 
-  ITEM_INDEX_CACHE.set("items", entries);
-  return entries;
+      ITEM_INDEX_CACHE.set("items", entries);
+      return entries;
+    } finally {
+      itemIndexBuildPromise = null;
+    }
+  })();
+
+  return itemIndexBuildPromise;
 }
 
 const ALLOWED_ITEM_TYPES = new Set([
@@ -492,6 +504,11 @@ async function refreshBulkOrderUi() {
   );
 }
 
+function renderSearchLoading(listElement) {
+  listElement.empty();
+  listElement.append('<li class="placeholder">Index wird geladen...</li>');
+}
+
 async function updateSearchResults(query, listElement, gmFiltersOverride) {
   const searchTerm = query.trim().toLowerCase();
   if (!searchTerm) {
@@ -501,7 +518,12 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
   }
 
   const gmFilters = gmFiltersOverride ?? getCurrentGmFilters();
-  const itemEntries = await getCachedItemIndexEntries();
+  const itemEntriesPromise = getCachedItemIndexEntries();
+  if (!ITEM_INDEX_CACHE.has("items")) {
+    renderSearchLoading(listElement);
+    resetResultSelection(listElement);
+  }
+  const itemEntries = await itemEntriesPromise;
 
   const results = itemEntries
     .filter(({ entry }) => isAllowedItemEntry(entry))
@@ -1869,6 +1891,7 @@ async function openShopDialog(actor) {
     const searchInput = html.find('input[name="store-search"]');
     const resultsList = html.find(".store-results ul");
     resultsList.data("actor", actor ?? null);
+    void getCachedItemIndexEntries();
     const debouncedSearch = debounce((value) => {
       void updateSearchResults(value, resultsList);
     });
@@ -2109,6 +2132,7 @@ function invalidateCompendiumCaches() {
   PACK_INDEX_CACHE.clear();
   ITEM_INDEX_CACHE.clear();
   ITEM_DESCRIPTION_CACHE.clear();
+  itemIndexBuildPromise = null;
 }
 
 export function registerPF2eGeneralStore() {

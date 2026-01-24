@@ -295,9 +295,11 @@ function normalizeBulkOrderState(state = {}) {
 }
 
 function getBulkOrderState() {
-  return normalizeBulkOrderState(
-    game.settings?.get(MODULE_ID, BULK_ORDER_SETTING) ?? currentBulkOrder
-  );
+  const isGm = game.user?.isGM;
+  const rawState = isGm
+    ? game.settings?.get(MODULE_ID, BULK_ORDER_SETTING) ?? currentBulkOrder
+    : currentBulkOrder;
+  return normalizeBulkOrderState(rawState ?? currentBulkOrder);
 }
 
 async function setBulkOrderState(nextState) {

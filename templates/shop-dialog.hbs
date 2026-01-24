@@ -46,9 +46,15 @@
         </span>
         <span class="store-availability__separator">·</span>
         {{#if partyGold}}
-          <span class="store-availability__party">Party-Stash {{partyGold}}</span>
+          <span class="store-availability__party">
+            <i class="fas fa-users store-availability__icon" aria-hidden="true"></i>
+            Party-Stash {{partyGold}}
+          </span>
         {{else}}
-          <span class="store-availability__party">Party-Stash: Nicht verfügbar</span>
+          <span class="store-availability__party">
+            <i class="fas fa-users store-availability__icon" aria-hidden="true"></i>
+            Party-Stash: Nicht verfügbar
+          </span>
         {{/if}}
       </div>
     </div>

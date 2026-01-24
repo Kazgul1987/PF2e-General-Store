@@ -46,6 +46,12 @@
   width: 24px;
 }
 
+.pf2e-general-store-dialog .store-availability__icon {
+  color: var(--pf2e-general-store-accent);
+  font-size: 0.85rem;
+  margin-right: 0.35rem;
+}
+
 .pf2e-general-store-dialog .store-title {
   font-size: 1rem;
   font-weight: 600;

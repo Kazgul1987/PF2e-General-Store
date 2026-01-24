@@ -30,7 +30,14 @@
       <div class="store-availability">
         <span>Verfügbar:</span>
         <span class="store-availability__actor">
-          {{actorName}}
+          {{#if actorTokenSrc}}
+            <img
+              class="store-availability__actor-token"
+              src="{{actorTokenSrc}}"
+              alt="{{actorName}}"
+            />
+          {{/if}}
+          <span class="store-availability__actor-name">{{actorName}}</span>
           {{#if actorGold}}
             {{actorGold}}
           {{else}}

@@ -574,6 +574,7 @@ async function handleBulkOrderAction(payload) {
     if (!itemId || !pack) {
       return;
     }
+    const quantity = Math.max(1, Number(data?.quantity) || 1);
     const price = Number(data?.price) || 0;
     const name = data?.name ?? "Unbekanntes Item";
     const wasConfirmed = player.confirmed;
@@ -581,9 +582,9 @@ async function handleBulkOrderAction(payload) {
       (item) => item.itemId === itemId && item.pack === pack
     );
     if (existingItem) {
-      existingItem.quantity += 1;
+      existingItem.quantity += quantity;
     } else {
-      player.items.push({ itemId, pack, quantity: 1, price, name });
+      player.items.push({ itemId, pack, quantity, price, name });
     }
     player.confirmed = false;
     player.needsReconfirm = wasConfirmed || player.needsReconfirm;
@@ -1655,6 +1656,11 @@ async function openShopDialog(actor) {
         0
       );
     const updateCartSummary = () => {
+      if (isBulkOrderActive()) {
+        const bulkTotal = getBulkOrderState().totalPrice;
+        cartTotalElement.text(`${formatGold(bulkTotal)} gp`);
+        return;
+      }
       cartTotalElement.text(`${formatGold(getCartTotal())} gp`);
     };
     const addSelectedItemToCart = async () => {
@@ -1683,6 +1689,17 @@ async function openShopDialog(actor) {
       }
       const quantity = await openCartQuantityDialog({ name, priceGold });
       if (!Number.isFinite(quantity) || quantity < 1) {
+        return;
+      }
+      if (isBulkOrderActive()) {
+        requestBulkOrderAction("addItem", {
+          itemId,
+          pack: packCollection,
+          price: priceGold,
+          name,
+          quantity,
+        });
+        updateCartSummary();
         return;
       }
       const key = `${packCollection}.${itemId}`;

@@ -150,6 +150,32 @@ function normalizeTraits(traitsData) {
   return [];
 }
 
+function normalizeRarity(rarityValue) {
+  if (typeof rarityValue !== "string") {
+    return null;
+  }
+  const normalized = rarityValue.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  return normalized;
+}
+
+function formatRarityLabel(rarity) {
+  switch (rarity) {
+    case "common":
+      return "Common";
+    case "uncommon":
+      return "Uncommon";
+    case "rare":
+      return "Rare";
+    case "unique":
+      return "Unique";
+    default:
+      return rarity ? rarity.charAt(0).toUpperCase() + rarity.slice(1) : "";
+  }
+}
+
 function normalizeGmFilters(filters = {}) {
   const traits = Array.isArray(filters.traits) ? filters.traits : [];
   const normalizedTraits = traits
@@ -329,6 +355,13 @@ function renderSearchResults(results, listElement) {
             <span class="store-result__level">Level ${result.level ?? "–"}</span>
             ${result.isLegacy ? '<span class="store-result__legacy">Legacy</span>' : ""}
             ${
+              result.rarity
+                ? `<span class="store-result__rarity store-result__rarity--${result.rarity}">${formatRarityLabel(
+                    result.rarity
+                  )}</span>`
+                : ""
+            }
+            ${
               result.traits?.length
                 ? `<span class="store-result__traits">${result.traits
                     .map((trait) => `<span class="store-result__trait">${trait}</span>`)
@@ -418,6 +451,7 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
       priceGold: getPriceInGold(entry),
       traits: normalizeTraits(entry.system?.traits),
       level: normalizeLevel(entry.system?.level),
+      rarity: normalizeRarity(entry.system?.traits?.rarity),
       isLegacy: isLegacyItem(entry),
       pack: pack.collection,
       itemId: entry._id,

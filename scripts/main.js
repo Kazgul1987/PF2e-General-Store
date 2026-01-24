@@ -1613,6 +1613,156 @@ function openCartQuantityDialog({ name, priceGold }) {
   });
 }
 
+function getSpellConsumableTypes() {
+  const spellcastingItems = CONFIG?.PF2E?.spellcastingItems ?? {};
+  return Object.entries(spellcastingItems).map(([type, data]) => ({
+    type,
+    label: data?.label ?? data?.name ?? type,
+  }));
+}
+
+function getSpellConsumableRanks(type) {
+  return Object.keys(CONFIG?.PF2E?.spellcastingItems?.[type]?.compendiumUuids ?? {})
+    .map((rank) => Number(rank))
+    .filter((rank) => Number.isFinite(rank))
+    .sort((a, b) => a - b);
+}
+
+function openSpellConsumableSelectionDialog(spell) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const finalize = (value, warningMessage) => {
+      if (resolved) {
+        return;
+      }
+      resolved = true;
+      if (!value) {
+        ui.notifications.warn(
+          warningMessage || "Auswahl abgebrochen oder ungültig."
+        );
+      }
+      resolve(value);
+    };
+
+    const types = getSpellConsumableTypes();
+    if (!types.length) {
+      finalize(null, "Keine Spell-Consumable-Typen verfügbar.");
+      return;
+    }
+
+    const defaultType = getDefaultSpellConsumableType() ?? types[0]?.type;
+    const defaultRank = getDefaultSpellConsumableRank(spell, defaultType);
+    const ranks = getSpellConsumableRanks(defaultType);
+    const rankOptions = ranks.length ? ranks : [defaultRank].filter((rank) =>
+      Number.isFinite(rank)
+    );
+
+    const content = `
+      <form class="pf2e-general-store-spell-selection">
+        <div class="form-group">
+          <label for="pf2e-general-store-spell-type">Typ</label>
+          <select id="pf2e-general-store-spell-type" name="type">
+            ${types
+              .map(
+                ({ type, label }) =>
+                  `<option value="${type}" ${
+                    type === defaultType ? "selected" : ""
+                  }>${label}</option>`
+              )
+              .join("")}
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="pf2e-general-store-spell-rank">Rang</label>
+          <select id="pf2e-general-store-spell-rank" name="rank">
+            ${rankOptions
+              .map(
+                (rank) =>
+                  `<option value="${rank}" ${
+                    rank === defaultRank ? "selected" : ""
+                  }>Rang ${rank}</option>`
+              )
+              .join("")}
+          </select>
+        </div>
+      </form>
+    `;
+
+    const dialog = new Dialog({
+      title: "Spell-Consumable auswählen",
+      content,
+      buttons: {
+        select: {
+          label: "Auswählen",
+          callback: (html) => {
+            const form = html[0]?.querySelector("form");
+            if (!form) {
+              finalize(null, "Auswahl ungültig.");
+              return true;
+            }
+            const type = form.elements.type?.value;
+            const rankValue = Number(form.elements.rank?.value);
+            const availableRanks = getSpellConsumableRanks(type);
+            if (!type || !availableRanks.length) {
+              ui.notifications.warn("Bitte wähle einen gültigen Typ aus.");
+              return false;
+            }
+            if (!Number.isFinite(rankValue) || !availableRanks.includes(rankValue)) {
+              ui.notifications.warn("Bitte wähle einen gültigen Rang aus.");
+              return false;
+            }
+            finalize({ type, rank: rankValue });
+            return true;
+          },
+        },
+        close: {
+          label: "Abbrechen",
+          callback: () => {
+            finalize(null, "Auswahl abgebrochen.");
+          },
+        },
+      },
+      default: "select",
+      close: () => {
+        finalize(null, "Auswahl abgebrochen.");
+      },
+    });
+
+    dialog.render(true);
+
+    Hooks.once("renderDialog", (app, html) => {
+      if (app !== dialog) {
+        return;
+      }
+      const typeSelect = html.find("#pf2e-general-store-spell-type");
+      const rankSelect = html.find("#pf2e-general-store-spell-rank");
+      const updateRankOptions = (type) => {
+        const availableRanks = getSpellConsumableRanks(type);
+        const selectedRank = getDefaultSpellConsumableRank(spell, type);
+        rankSelect.empty();
+        if (!availableRanks.length) {
+          rankSelect.append(
+            `<option value="">Keine Ränge verfügbar</option>`
+          );
+          return;
+        }
+        availableRanks.forEach((rank) => {
+          const option = document.createElement("option");
+          option.value = String(rank);
+          option.textContent = `Rang ${rank}`;
+          if (rank === selectedRank) {
+            option.selected = true;
+          }
+          rankSelect.append(option);
+        });
+      };
+      typeSelect.on("change", (event) => {
+        updateRankOptions(event.target.value);
+      });
+    });
+  });
+}
+
 function getSpellcastingItemConfig(type, rank) {
   const spellcastingItems = CONFIG?.PF2E?.spellcastingItems ?? {};
   const itemData = spellcastingItems[type];
@@ -1868,7 +2018,11 @@ async function openShopDialog(actor) {
           ui.notifications.error("Spell konnte nicht geladen werden.");
           return;
         }
-        spellDetails = await createConsumableSourceFromSpell(spell);
+        const selection = await openSpellConsumableSelectionDialog(spell);
+        if (!selection) {
+          return;
+        }
+        spellDetails = await createConsumableSourceFromSpell(spell, selection);
         if (!spellDetails) {
           return;
         }

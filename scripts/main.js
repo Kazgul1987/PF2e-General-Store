@@ -1363,6 +1363,36 @@ function updateBulkOrderPanel(dialogElement) {
     (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
     0
   );
+  const players = Object.entries(state.players ?? {});
+  const playersHtml = players.length
+    ? players
+        .map(([playerId, playerData]) => {
+          const user = game.users?.get(playerId);
+          const character = user?.character;
+          const name = character?.name ?? user?.name ?? playerData?.name ?? "Unbekannt";
+          const avatar =
+            character?.prototypeToken?.texture?.src ??
+            character?.img ??
+            user?.avatar ??
+            "icons/svg/mystery-man.svg";
+          const confirmed = Boolean(playerData?.confirmed);
+          return `
+            <li class="bulk-order__player">
+              <span class="bulk-order__player-token">
+                <img src="${avatar}" alt="" />
+                ${
+                  confirmed
+                    ? '<span class="bulk-order__player-check" title="Bestätigt"><i class="fas fa-check" aria-hidden="true"></i></span>'
+                    : ""
+                }
+              </span>
+              <span class="bulk-order__player-name">${name}</span>
+            </li>
+          `;
+        })
+        .join("")
+    : '<li class="bulk-order__placeholder">Noch keine Spieler.</li>';
+  bulkSection.find(".bulk-order__players").html(playersHtml);
   bulkSection.find(".bulk-order__items").html(buildBulkOrderItemsHtml(items, true));
   bulkSection.find(".bulk-order__total").text(`${formatGold(total)} gp`);
   const statusText = player.confirmed
@@ -1373,7 +1403,7 @@ function updateBulkOrderPanel(dialogElement) {
   bulkSection.find(".bulk-order__status").text(statusText);
   const confirmButton = bulkSection.find(".bulk-order__confirm");
   confirmButton.prop("disabled", items.length === 0 || player.confirmed);
-  confirmButton.text(player.confirmed ? "Bestätigt" : "Bestätigen");
+  confirmButton.text(player.confirmed ? "Bestätigt" : "Eigene Auswahl bestätigen");
 }
 
 function updateGmBulkOrderPanel(dialogElement) {

@@ -1201,7 +1201,17 @@ function setupResultInteractions(resultsList) {
 }
 
 async function openShopDialog(actor) {
-  const content = await renderTemplate(SHOP_DIALOG_TEMPLATE, {});
+  const actorName = actor?.name ?? "Unbekannter Actor";
+  const { currency: actorCurrency } = getActorCurrency(actor);
+  const actorGold = formatCurrencyInGold(actorCurrency);
+  const partyActor = getPartyStashActor();
+  const { currency: partyCurrency } = getActorCurrency(partyActor);
+  const partyGold = partyActor ? formatCurrencyInGold(partyCurrency) : null;
+  const content = await renderTemplate(SHOP_DIALOG_TEMPLATE, {
+    actorName,
+    actorGold,
+    partyGold,
+  });
 
   const dialog = new Dialog(
     {

@@ -986,6 +986,135 @@ function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) 
   dialog.render(true);
 }
 
+function buildCartDialogItemsHtml(items) {
+  if (!items.length) {
+    return '<li class="cart-dialog__placeholder">Keine Items im Warenkorb.</li>';
+  }
+  return items
+    .map(
+      (item) => `
+        <li class="cart-dialog__item" data-item-key="${item.key}">
+          <span class="cart-dialog__name">${item.name}</span>
+          <input class="cart-dialog__qty" type="number" min="1" value="${item.quantity}" />
+          <span class="cart-dialog__unit">${formatGold(item.price)} gp</span>
+          <span class="cart-dialog__total">${formatGold(
+            item.price * item.quantity
+          )} gp</span>
+          <button class="cart-dialog__remove" type="button">Entfernen</button>
+        </li>
+      `
+    )
+    .join("");
+}
+
+function buildCartDialogContent({
+  actorName,
+  actorAvailability,
+  partyAvailability,
+  items,
+  total,
+}) {
+  return `
+    <form class="pf2e-general-store-cart-dialog">
+      <ul class="cart-dialog__items">
+        ${buildCartDialogItemsHtml(items)}
+      </ul>
+      <div class="cart-dialog__summary">
+        Gesamt: <span data-cart-dialog-total>${formatGold(total)} gp</span>
+      </div>
+      <fieldset class="form-group">
+        <legend>Zahlungsquelle</legend>
+        <label class="store-option">
+          <span class="store-option__row">
+            <input type="checkbox" name="payment-actor" />
+            <span>${actorName}</span>
+          </span>
+          <span class="store-option__availability">Verfügbar: ${actorAvailability}</span>
+        </label>
+        <label class="store-option">
+          <span class="store-option__row">
+            <input type="checkbox" name="payment-party" />
+            <span>Party-Stash</span>
+          </span>
+          <span class="store-option__availability">Verfügbar: ${partyAvailability}</span>
+        </label>
+      </fieldset>
+    </form>
+  `;
+}
+
+async function handleCartCheckout({ actor, items, useActor, useParty }) {
+  if (!actor) {
+    ui.notifications.error("Kein gültiger Actor ausgewählt.");
+    return { ok: false };
+  }
+  if (!Array.isArray(items) || !items.length) {
+    ui.notifications.warn("Der Warenkorb ist leer.");
+    return { ok: false };
+  }
+  if (!useActor && !useParty) {
+    ui.notifications.warn("Bitte wähle eine Zahlungsquelle aus.");
+    return { ok: false };
+  }
+  if (useActor && useParty) {
+    ui.notifications.warn("Bitte wähle genau eine Zahlungsquelle aus.");
+    return { ok: false };
+  }
+
+  let paymentActor = null;
+  if (useActor) {
+    paymentActor = actor;
+  } else if (useParty) {
+    paymentActor = getPartyStashActor();
+    if (!paymentActor) {
+      ui.notifications.error("Kein Party-Stash gefunden.");
+      return { ok: false };
+    }
+  }
+
+  const itemDocuments = new Map();
+  for (const item of items) {
+    const pack = game.packs.get(item.pack);
+    if (!pack) {
+      ui.notifications.error("Compendium nicht gefunden.");
+      return { ok: false };
+    }
+    const document = await pack.getDocument(item.itemId);
+    if (!document) {
+      ui.notifications.error("Mindestens ein Item konnte nicht geladen werden.");
+      return { ok: false };
+    }
+    itemDocuments.set(item.key, document);
+  }
+
+  const totalPrice = items.reduce(
+    (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
+    0
+  );
+  const paymentResult = await deductCurrency(paymentActor, totalPrice);
+  if (!paymentResult.ok) {
+    if (paymentResult.reason === "insufficient-funds") {
+      ui.notifications.warn("Nicht genug Gold für den Kauf.");
+    }
+    return { ok: false };
+  }
+
+  for (const item of items) {
+    const itemDocument = itemDocuments.get(item.key);
+    if (!itemDocument) {
+      continue;
+    }
+    const itemData = itemDocument.toObject();
+    delete itemData._id;
+    itemData.system = itemData.system ?? {};
+    itemData.system.quantity = item.quantity;
+    await actor.createEmbeddedDocuments("Item", [itemData]);
+  }
+
+  ui.notifications.info("Warenkorb erfolgreich gekauft.");
+  return { ok: true };
+}
+
 function openCartQuantityDialog({ name, priceGold }) {
   return new Promise((resolve) => {
     let resolved = false;
@@ -1282,12 +1411,15 @@ async function openShopDialog(actor) {
 
     const cartItems = new Map();
     const cartTotalElement = html.find("[data-cart-total]");
-    const updateCartSummary = () => {
-      const total = Array.from(cartItems.values()).reduce(
+    const getCartItemsArray = () =>
+      Array.from(cartItems.entries()).map(([key, item]) => ({ key, ...item }));
+    const getCartTotal = () =>
+      getCartItemsArray().reduce(
         (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
         0
       );
-      cartTotalElement.text(`${formatGold(total)} gp`);
+    const updateCartSummary = () => {
+      cartTotalElement.text(`${formatGold(getCartTotal())} gp`);
     };
     const addSelectedItemToCart = async () => {
       const selected = html.find(".store-result__button.selected");
@@ -1322,6 +1454,101 @@ async function openShopDialog(actor) {
       }
       updateCartSummary();
     };
+    const openCartDialog = () => {
+      const { currency: actorCurrency } = getActorCurrency(actor);
+      const actorAvailability = formatCurrencyInGold(actorCurrency) ?? "Nicht verfügbar";
+      const partyActor = getPartyStashActor();
+      const { currency: partyCurrency } = getActorCurrency(partyActor);
+      const partyAvailability = partyActor
+        ? formatCurrencyInGold(partyCurrency) ?? "Nicht verfügbar"
+        : "Nicht verfügbar";
+      const actorName = actor?.name ?? "Unbekannter Actor";
+      const dialog = new Dialog({
+        title: "Einkaufskorb",
+        content: buildCartDialogContent({
+          actorName,
+          actorAvailability,
+          partyAvailability,
+          items: getCartItemsArray(),
+          total: getCartTotal(),
+        }),
+        buttons: {
+          checkout: {
+            label: "Zur Kasse",
+            callback: async (dialogHtml) => {
+              const form = dialogHtml[0]?.querySelector("form");
+              if (!form) {
+                return false;
+              }
+              const useActor = form.elements["payment-actor"]?.checked ?? false;
+              const useParty = form.elements["payment-party"]?.checked ?? false;
+              const items = getCartItemsArray();
+              const result = await handleCartCheckout({
+                actor,
+                items,
+                useActor,
+                useParty,
+              });
+              if (!result.ok) {
+                return false;
+              }
+              cartItems.clear();
+              updateCartSummary();
+              return true;
+            },
+          },
+          close: {
+            label: "Schließen",
+          },
+        },
+        default: "checkout",
+      });
+
+      dialog.render(true);
+
+      Hooks.once("renderDialog", (app, dialogHtml) => {
+        if (app !== dialog) {
+          return;
+        }
+        const listElement = dialogHtml.find(".cart-dialog__items");
+        const renderCartDialogList = () => {
+          listElement.html(buildCartDialogItemsHtml(getCartItemsArray()));
+          dialogHtml
+            .find("[data-cart-dialog-total]")
+            .text(`${formatGold(getCartTotal())} gp`);
+        };
+
+        dialogHtml.on("click", ".cart-dialog__remove", (event) => {
+          const key = $(event.currentTarget)
+            .closest(".cart-dialog__item")
+            .data("itemKey");
+          if (!key) {
+            return;
+          }
+          cartItems.delete(key);
+          updateCartSummary();
+          renderCartDialogList();
+        });
+
+        dialogHtml.on("change", ".cart-dialog__qty", (event) => {
+          const input = event.currentTarget;
+          const key = $(input).closest(".cart-dialog__item").data("itemKey");
+          if (!key || !cartItems.has(key)) {
+            return;
+          }
+          let quantity = Number(input.value);
+          if (!Number.isFinite(quantity) || quantity < 1) {
+            ui.notifications.warn("Bitte gib eine gültige Menge an.");
+            quantity = 1;
+          }
+          const item = cartItems.get(key);
+          item.quantity = quantity;
+          cartItems.set(key, item);
+          updateCartSummary();
+          renderCartDialogList();
+        });
+      });
+    };
 
     const searchInput = html.find('input[name="store-search"]');
     const resultsList = html.find(".store-results ul");
@@ -1338,6 +1565,9 @@ async function openShopDialog(actor) {
 
     html.on("click", ".store-cart__add", () => {
       void addSelectedItemToCart();
+    });
+    html.on("click", ".store-cart__view", () => {
+      openCartDialog();
     });
 
     html.on("click", ".bulk-order__confirm", () => {

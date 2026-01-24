@@ -1582,16 +1582,22 @@ async function openShopDialog(actor) {
       const wishlistState = getWishlistState();
       const partyActor = getPartyStashActor();
       const { currency: partyCurrency } = getActorCurrency(partyActor);
-      const partyAvailability = partyActor
+      const hasPartyCurrency = partyActor && hasCurrencyValues(partyCurrency);
+      const partyAvailability = hasPartyCurrency
         ? formatCurrencyInGold(partyCurrency) ?? "Nicht verfügbar"
         : "Nicht verfügbar";
       const currentUserId = game.user?.id ?? "";
       const items = buildWishlistDialogItems(wishlistState, currentUserId);
-      const totalValue = `${formatGold(calculateWishlistTotal(wishlistState))} gp`;
+      const wishlistTotal = calculateWishlistTotal(wishlistState);
+      const totalValue = `${formatGold(wishlistTotal)} gp`;
+      const remainingValue = hasPartyCurrency
+        ? `${formatGold(getCurrencyInCopper(partyCurrency) / 100 - wishlistTotal)} gp`
+        : "Nicht verfügbar";
       const content = await renderTemplate(WISHLIST_DIALOG_TEMPLATE, {
         items,
         partyGold: partyAvailability,
         totalValue,
+        remainingValue,
       });
       const removeSelectedFromWishlist = async (dialogHtml) => {
         const selections = dialogHtml.find(".wishlist-dialog__select-input:checked");

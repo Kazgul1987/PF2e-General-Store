@@ -986,6 +986,65 @@ function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) 
   dialog.render(true);
 }
 
+function openCartQuantityDialog({ name, priceGold }) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const finalize = (value) => {
+      if (resolved) {
+        return;
+      }
+      resolved = true;
+      resolve(value);
+    };
+    const content = `
+      <form class="pf2e-general-store-cart">
+        <p class="purchase-title">${name}</p>
+        <p class="purchase-price">${formatGold(priceGold)} gp</p>
+        <div class="form-group">
+          <label for="pf2e-general-store-cart-quantity">Menge</label>
+          <input id="pf2e-general-store-cart-quantity" type="number" name="quantity" min="1" value="1" />
+        </div>
+      </form>
+    `;
+
+    const dialog = new Dialog({
+      title: "Menge auswählen",
+      content,
+      buttons: {
+        add: {
+          label: "Hinzufügen",
+          callback: (html) => {
+            const form = html[0]?.querySelector("form");
+            if (!form) {
+              finalize(null);
+              return true;
+            }
+            const quantity = Number(form.elements.quantity?.value);
+            if (!Number.isFinite(quantity) || quantity < 1) {
+              ui.notifications.warn("Bitte gib eine gültige Menge an.");
+              return false;
+            }
+            finalize(quantity);
+            return true;
+          },
+        },
+        close: {
+          label: "Abbrechen",
+          callback: () => {
+            finalize(null);
+          },
+        },
+      },
+      default: "add",
+      close: () => {
+        finalize(null);
+      },
+    });
+
+    dialog.render(true);
+  });
+}
+
 function getPlayerOrder(state, userId) {
   return (
     state.players?.[userId] ?? {
@@ -1221,6 +1280,49 @@ async function openShopDialog(actor) {
       return;
     }
 
+    const cartItems = new Map();
+    const cartTotalElement = html.find("[data-cart-total]");
+    const updateCartSummary = () => {
+      const total = Array.from(cartItems.values()).reduce(
+        (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
+        0
+      );
+      cartTotalElement.text(`${formatGold(total)} gp`);
+    };
+    const addSelectedItemToCart = async () => {
+      const selected = html.find(".store-result__button.selected");
+      if (!selected.length) {
+        ui.notifications.warn("Bitte wähle zuerst ein Item aus.");
+        return;
+      }
+      const name = selected.data("name") ?? "Unbekanntes Item";
+      const priceGold = Number(selected.data("price")) || 0;
+      const packCollection = selected.data("pack");
+      const itemId = selected.data("itemId");
+      if (!packCollection || !itemId) {
+        ui.notifications.warn("Kein gültiges Item ausgewählt.");
+        return;
+      }
+      const quantity = await openCartQuantityDialog({ name, priceGold });
+      if (!Number.isFinite(quantity) || quantity < 1) {
+        return;
+      }
+      const key = `${packCollection}.${itemId}`;
+      const existing = cartItems.get(key);
+      if (existing) {
+        existing.quantity += quantity;
+      } else {
+        cartItems.set(key, {
+          itemId,
+          pack: packCollection,
+          name,
+          price: priceGold,
+          quantity,
+        });
+      }
+      updateCartSummary();
+    };
+
     const searchInput = html.find('input[name="store-search"]');
     const resultsList = html.find(".store-results ul");
     resultsList.data("actor", actor ?? null);
@@ -1234,6 +1336,10 @@ async function openShopDialog(actor) {
 
     setupResultInteractions(resultsList);
 
+    html.on("click", ".store-cart__add", () => {
+      void addSelectedItemToCart();
+    });
+
     html.on("click", ".bulk-order__confirm", () => {
       requestBulkOrderAction("confirmPlayer");
     });
@@ -1246,6 +1352,7 @@ async function openShopDialog(actor) {
       });
     });
 
+    updateCartSummary();
     updateBulkOrderPanel(html);
     void updateSearchResults(searchInput.val() ?? "", resultsList);
   });

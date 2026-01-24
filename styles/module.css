@@ -274,6 +274,32 @@
   padding: 0 0.25rem;
 }
 
+.pf2e-general-store-cart-dialog .cart-dialog__items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pf2e-general-store-cart-dialog .cart-dialog__item {
+  align-items: center;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.pf2e-general-store-cart-dialog .cart-dialog__item--bulk {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.pf2e-general-store-cart-dialog .cart-dialog__total {
+  font-variant-numeric: tabular-nums;
+  justify-self: end;
+  text-align: right;
+}
+
 .pf2e-general-store-cart-dialog .cart-dialog__item--bulk .cart-dialog__item-main {
   display: flex;
   flex-direction: column;

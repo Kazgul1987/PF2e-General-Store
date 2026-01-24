@@ -3,6 +3,7 @@ const SHOP_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/shop-dialog.hbs`;
 const GM_FILTERS_TEMPLATE = `modules/${MODULE_ID}/templates/gm-filters.hbs`;
 const GM_FILTERS_SETTING = "gmFilters";
 const BULK_ORDER_SETTING = "bulkOrderState";
+const SHOW_STORE_BUTTON_SETTING = "showStoreButtonForPlayers";
 const PACK_INDEX_CACHE = new Map();
 const ITEM_INDEX_CACHE = new Map();
 const ITEM_DESCRIPTION_CACHE = new Map();
@@ -1969,7 +1970,9 @@ function openGmMenu() {
 }
 
 function addActorSheetHeaderControl(app, html) {
-  if (!game.user?.isGM) {
+  const allowPlayerButton = game.settings.get(MODULE_ID, SHOW_STORE_BUTTON_SETTING);
+  const canShowButton = game.user?.isGM || (allowPlayerButton && app.actor?.isOwner);
+  if (!canShowButton) {
     return;
   }
   const appElement = html.closest(".app");
@@ -2089,6 +2092,14 @@ export function registerPF2eGeneralStore() {
 }
 
 Hooks.once("init", () => {
+  game.settings.register(MODULE_ID, SHOW_STORE_BUTTON_SETTING, {
+    name: "General Store: Store-Button für Spieler",
+    hint: "Erlaubt Spielern den Store-Button auf ihren eigenen Charakterbögen.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false,
+  });
   game.settings.register(MODULE_ID, GM_FILTERS_SETTING, {
     name: "General Store GM Filter",
     scope: "world",

@@ -238,6 +238,7 @@
 .pf2e-general-store-purchase {
   display: grid;
   gap: 0.65rem;
+  min-width: 320px;
 }
 
 .pf2e-general-store-purchase .purchase-title {

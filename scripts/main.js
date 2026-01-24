@@ -1309,7 +1309,7 @@ function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) 
 function buildCartItemDetailsHtml(item) {
   const traits = Array.isArray(item.traits) ? item.traits : [];
   const isSpell = item.entryType === "spell";
-  const levelLabel = item.level ?? "–";
+  const levelLabel = isSpell ? item.rank ?? "–" : item.level ?? "–";
   const levelTitle = isSpell ? "Rank" : "Level";
   const legacyHtml = item.isLegacy
     ? '<span class="store-result__legacy">Legacy</span>'
@@ -2054,6 +2054,9 @@ async function openShopDialog(actor) {
       const existing = cartItems.get(key);
       if (existing) {
         existing.quantity += quantity;
+        if (entryType === "spell" && existing.rank == null && spellDetails?.rank != null) {
+          existing.rank = spellDetails.rank;
+        }
       } else {
         cartItems.set(key, {
           itemId,

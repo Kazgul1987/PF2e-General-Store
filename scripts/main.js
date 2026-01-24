@@ -1615,10 +1615,26 @@ function openCartQuantityDialog({ name, priceGold }) {
 
 function getSpellConsumableTypes() {
   const spellcastingItems = CONFIG?.PF2E?.spellcastingItems ?? {};
+  const consumableTypes = CONFIG?.PF2E?.consumableTypes ?? {};
   return Object.entries(spellcastingItems).map(([type, data]) => ({
     type,
-    label: data?.label ?? data?.name ?? type,
+    label:
+      (consumableTypes?.[type]?.label ?? consumableTypes?.[type])
+        ? game?.i18n?.localize?.(
+            consumableTypes?.[type]?.label ?? consumableTypes?.[type]
+          ) ??
+          consumableTypes?.[type]?.label ??
+          consumableTypes?.[type]
+        : data?.label ?? data?.name ?? type,
   }));
+}
+
+function buildSelectOptionHTML({ value, label, selected }) {
+  const option = document.createElement("option");
+  option.value = value;
+  option.textContent = label;
+  option.selected = selected;
+  return option.outerHTML;
 }
 
 function getSpellConsumableRanks(type) {
@@ -1665,9 +1681,11 @@ function openSpellConsumableSelectionDialog(spell) {
             ${types
               .map(
                 ({ type, label }) =>
-                  `<option value="${type}" ${
-                    type === defaultType ? "selected" : ""
-                  }>${label}</option>`
+                  buildSelectOptionHTML({
+                    value: type,
+                    label,
+                    selected: type === defaultType,
+                  })
               )
               .join("")}
           </select>

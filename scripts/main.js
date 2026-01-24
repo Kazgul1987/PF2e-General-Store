@@ -71,7 +71,9 @@ function getItemCompendiumPacks() {
 }
 
 function getSpellCompendiumPacks() {
-  return game.packs.filter((pack) => pack.documentName === "Spell");
+  return game.packs.filter(
+    (pack) => pack.documentName === "Spell" || pack.documentName === "Item"
+  );
 }
 
 function getPackIndex(pack) {
@@ -162,12 +164,17 @@ async function getCachedSpellIndexEntries() {
       const indices = await Promise.all(
         packs.map((pack) => getSpellPackIndex(pack))
       );
-      const entries = indices.flatMap((index, indexPosition) =>
-        Array.from(index).map((entry) => ({
-          entry,
-          pack: packs[indexPosition],
-        }))
-      );
+      const entries = indices.flatMap((index, indexPosition) => {
+        const pack = packs[indexPosition];
+        return Array.from(index)
+          .filter(
+            (entry) => pack.documentName !== "Item" || entry.type === "spell"
+          )
+          .map((entry) => ({
+            entry,
+            pack,
+          }));
+      });
 
       SPELL_INDEX_CACHE.set("spells", entries);
       return entries;

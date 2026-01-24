@@ -356,3 +356,114 @@
   justify-self: end;
   text-align: right;
 }
+
+.pf2e-general-store-wishlist-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__summary {
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__placeholder {
+  color: rgba(0, 0, 0, 0.6);
+  font-style: italic;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__item {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__item-main {
+  align-items: center;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__select {
+  display: flex;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__select-input {
+  height: 1rem;
+  width: 1rem;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__select-placeholder {
+  height: 1rem;
+  width: 1rem;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__name {
+  font-weight: 600;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__meta {
+  color: rgba(0, 0, 0, 0.6);
+  font-size: 0.85rem;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__price {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__players {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__player {
+  align-items: center;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 0.35rem;
+  padding: 0.15rem 0.5rem;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__player-avatar {
+  border-radius: 50%;
+  height: 20px;
+  object-fit: cover;
+  width: 20px;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__player-name {
+  font-size: 0.85rem;
+}
+
+.pf2e-general-store-wishlist-dialog .wishlist-dialog__player-qty {
+  color: rgba(0, 0, 0, 0.6);
+  font-size: 0.85rem;
+}

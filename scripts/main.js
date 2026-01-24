@@ -1,6 +1,7 @@
 const MODULE_ID = "pf2e-general-store";
 const SHOP_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/shop-dialog.hbs`;
 const GM_FILTERS_TEMPLATE = `modules/${MODULE_ID}/templates/gm-filters.hbs`;
+const WISHLIST_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/wishlist-dialog.hbs`;
 const GM_FILTERS_SETTING = "gmFilters";
 const SHOW_STORE_BUTTON_SETTING = "showStoreButtonForPlayers";
 const WISHLIST_SETTING = "wishlistState";
@@ -282,6 +283,32 @@ function calculateWishlistTotal(state) {
   );
 }
 
+function buildWishlistDialogItems(state, currentUserId) {
+  const wishlistState = normalizeWishlistState(state);
+  return Object.entries(wishlistState.items).map(([key, item]) => {
+    const players = Array.isArray(item.players)
+      ? item.players.map((player) => ({
+          name: player.name || "Unbekannter Spieler",
+          avatarSrc: player.tokenSrc || player.avatar || "",
+          quantity: player.quantity,
+        }))
+      : [];
+    const userEntry = Array.isArray(item.players)
+      ? item.players.find((player) => player.userId === currentUserId)
+      : null;
+    const totalValue = (Number(item.price) || 0) * (Number(item.quantity) || 0);
+    return {
+      key,
+      name: item.name,
+      quantity: item.quantity,
+      totalLabel: `${formatGold(totalValue)} gp`,
+      players,
+      canSelect: Boolean(userEntry && userEntry.quantity > 0),
+      selectQuantity: userEntry?.quantity ?? 0,
+    };
+  });
+}
+
 function getWishlistState() {
   return normalizeWishlistState(
     game.settings?.get(MODULE_ID, WISHLIST_SETTING) ?? currentWishlistState
@@ -381,11 +408,47 @@ function moveWishlistItemToCart(state, key, quantity) {
   return { state: wishlistState, total: calculateWishlistTotal(wishlistState), moved };
 }
 
+function moveWishlistPlayerToCart(state, key, userId, quantity) {
+  const wishlistState = normalizeWishlistState(state);
+  const item = wishlistState.items[key];
+  if (!item || !userId) {
+    return { state: wishlistState, total: calculateWishlistTotal(wishlistState), moved: null };
+  }
+  const playerIndex = Array.isArray(item.players)
+    ? item.players.findIndex((player) => player.userId === userId)
+    : -1;
+  if (playerIndex < 0) {
+    return { state: wishlistState, total: calculateWishlistTotal(wishlistState), moved: null };
+  }
+  const playerEntry = item.players[playerIndex];
+  const moveQuantity = Math.min(Number(quantity) || 0, playerEntry.quantity || 0);
+  if (moveQuantity <= 0) {
+    return { state: wishlistState, total: calculateWishlistTotal(wishlistState), moved: null };
+  }
+
+  const moved = { ...item, quantity: moveQuantity };
+  playerEntry.quantity -= moveQuantity;
+  item.quantity -= moveQuantity;
+
+  if (playerEntry.quantity <= 0) {
+    item.players.splice(playerIndex, 1);
+  }
+
+  if (item.quantity <= 0 || item.players.length === 0) {
+    delete wishlistState.items[key];
+  } else {
+    wishlistState.items[key] = item;
+  }
+
+  return { state: wishlistState, total: calculateWishlistTotal(wishlistState), moved };
+}
+
 const WISHLIST_MUTATIONS = {
   addItem: addWishlistItem,
   removeItem: removeWishlistItem,
   setQuantity: setWishlistItemQuantity,
   moveToCart: moveWishlistItemToCart,
+  movePlayerToCart: moveWishlistPlayerToCart,
 };
 
 async function applyWishlistMutation(type, ...args) {
@@ -1027,6 +1090,38 @@ function buildCartDialogContent({
   `;
 }
 
+async function buildCartItemFromWishlistItem(item) {
+  const pack = game.packs.get(item.pack);
+  let icon = "icons/svg/item-bag.svg";
+  let traits = [];
+  let rarity = null;
+  let level = null;
+  let isLegacy = false;
+
+  if (pack) {
+    const document = await pack.getDocument(item.itemId);
+    if (document) {
+      icon = document.img ?? icon;
+      traits = normalizeTraits(document.system?.traits);
+      rarity = normalizeRarity(document.system?.traits?.rarity);
+      level = normalizeLevel(document.system?.level);
+      isLegacy = isLegacyItem(document);
+    }
+  }
+
+  return {
+    itemId: item.itemId,
+    pack: item.pack,
+    name: item.name,
+    icon,
+    traits,
+    rarity,
+    level,
+    isLegacy,
+    price: item.price,
+  };
+}
+
 async function handleCartCheckout({ actor, items, useActor, useParty }) {
   if (!actor) {
     ui.notifications.error("Kein gültiger Actor ausgewählt.");
@@ -1290,6 +1385,46 @@ async function openShopDialog(actor) {
       }
       updateCartSummary();
     };
+    const addSelectedItemToWishlist = async () => {
+      const selected = html.find(".store-result__button.selected");
+      if (!selected.length) {
+        ui.notifications.warn("Bitte wähle zuerst ein Item aus.");
+        return;
+      }
+      const name = selected.data("name") ?? "Unbekanntes Item";
+      const priceGold = Number(selected.data("price")) || 0;
+      const packCollection = selected.data("pack");
+      const itemId = selected.data("itemId");
+      if (!packCollection || !itemId) {
+        ui.notifications.warn("Kein gültiges Item ausgewählt.");
+        return;
+      }
+      const quantity = await openCartQuantityDialog({ name, priceGold });
+      if (!Number.isFinite(quantity) || quantity < 1) {
+        return;
+      }
+      const tokenSrc =
+        actor?.prototypeToken?.texture?.src ?? actor?.img ?? game.user?.avatar ?? "";
+      const player = {
+        userId: game.user?.id ?? "",
+        name: game.user?.name ?? "Unbekannter Spieler",
+        avatar: game.user?.avatar ?? "",
+        tokenSrc,
+        quantity,
+      };
+      await applyWishlistMutation(
+        "addItem",
+        {
+          itemId,
+          pack: packCollection,
+          name,
+          price: priceGold,
+          quantity,
+        },
+        player
+      );
+      ui.notifications.info("Zur Wunschliste hinzugefügt.");
+    };
     const openCartDialog = async () => {
       const { currency: actorCurrency } = getActorCurrency(actor);
       const actorAvailability = formatCurrencyInGold(actorCurrency) ?? "Nicht verfügbar";
@@ -1385,6 +1520,81 @@ async function openShopDialog(actor) {
         });
       });
     };
+    const openWishlistDialog = async () => {
+      const wishlistState = getWishlistState();
+      const partyActor = getPartyStashActor();
+      const { currency: partyCurrency } = getActorCurrency(partyActor);
+      const partyAvailability = partyActor
+        ? formatCurrencyInGold(partyCurrency) ?? "Nicht verfügbar"
+        : "Nicht verfügbar";
+      const currentUserId = game.user?.id ?? "";
+      const items = buildWishlistDialogItems(wishlistState, currentUserId);
+      const totalValue = `${formatGold(calculateWishlistTotal(wishlistState))} gp`;
+      const content = await renderTemplate(WISHLIST_DIALOG_TEMPLATE, {
+        items,
+        partyGold: partyAvailability,
+        totalValue,
+      });
+      const dialog = new Dialog({
+        title: "Wunschliste",
+        content,
+        buttons: {
+          moveToCart: {
+            label: "Auswahl in meinen Warenkorb",
+            callback: async (dialogHtml) => {
+              const selections = dialogHtml.find(
+                ".wishlist-dialog__select-input:checked"
+              );
+              if (!selections.length) {
+                ui.notifications.warn("Bitte wähle mindestens ein Item aus.");
+                return false;
+              }
+              let updatedState = getWishlistState();
+              for (const selection of selections) {
+                const key = selection.dataset.itemKey;
+                const quantity = Number(selection.dataset.quantity) || 0;
+                if (!key || !updatedState.items[key]) {
+                  continue;
+                }
+                const { moved, state } = moveWishlistPlayerToCart(
+                  updatedState,
+                  key,
+                  currentUserId,
+                  quantity
+                );
+                updatedState = state;
+                if (!moved) {
+                  continue;
+                }
+                const cartItem = await buildCartItemFromWishlistItem(moved);
+                const cartKey = `${cartItem.pack}.${cartItem.itemId}`;
+                const existing = cartItems.get(cartKey);
+                if (existing) {
+                  existing.quantity += moved.quantity;
+                  cartItems.set(cartKey, existing);
+                } else {
+                  cartItems.set(cartKey, {
+                    ...cartItem,
+                    quantity: moved.quantity,
+                  });
+                }
+              }
+              await setWishlistState(updatedState);
+              updateCartSummary();
+              return true;
+            },
+          },
+          close: {
+            label: "Schließen",
+          },
+        },
+        default: "moveToCart",
+        width: 640,
+        height: 520,
+      });
+
+      dialog.render(true);
+    };
 
     const searchInput = html.find('input[name="store-search"]');
     const resultsList = html.find(".store-results ul");
@@ -1403,8 +1613,14 @@ async function openShopDialog(actor) {
     html.on("click", ".store-cart__add", () => {
       void addSelectedItemToCart();
     });
+    html.on("click", ".store-wishlist__add", () => {
+      void addSelectedItemToWishlist();
+    });
     html.on("click", ".store-cart__view", () => {
       void openCartDialog();
+    });
+    html.on("click", ".store-wishlist__view", () => {
+      void openWishlistDialog();
     });
 
     updateCartSummary();

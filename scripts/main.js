@@ -461,10 +461,15 @@ function refreshBulkOrderUi() {
   cartDialogs.forEach((dialog) => {
     const listElement = dialog.querySelector(".cart-dialog__items");
     const totalElement = dialog.querySelector("[data-cart-dialog-total]");
+    const appElement = dialog.closest(".app");
+    const checkoutButton = appElement?.querySelector('button[data-button="checkout"]');
     if (!listElement) {
       return;
     }
     const state = getBulkOrderState();
+    if (checkoutButton) {
+      checkoutButton.disabled = !(state.active && areAllBulkOrdersConfirmed(state));
+    }
     if (!state.active) {
       return;
     }
@@ -1027,6 +1032,14 @@ function buildCartDialogItemsHtml(items) {
     .join("");
 }
 
+function areAllBulkOrdersConfirmed(state) {
+  const players = Object.entries(state.players ?? {});
+  return (
+    players.length > 0 &&
+    players.every(([, player]) => player.items?.length && player.confirmed)
+  );
+}
+
 function getBulkCartDialogItems(state) {
   const itemsMap = new Map();
   const players = Object.entries(state.players ?? {});
@@ -1459,9 +1472,7 @@ function updateGmBulkOrderPanel(dialogElement) {
     : '<li class="bulk-order__placeholder">Noch keine Bestellungen.</li>';
   bulkSection.find(".bulk-order__gm-list").html(listHtml);
   bulkSection.find(".bulk-order__gm-total").text(`${formatGold(state.totalPrice)} gp`);
-  const allConfirmed =
-    players.length > 0 &&
-    players.every(([, player]) => player.items?.length && player.confirmed);
+  const allConfirmed = areAllBulkOrdersConfirmed(state);
   bulkSection.find(".bulk-order__gm-confirm").prop("disabled", !allConfirmed);
 }
 
@@ -1609,6 +1620,8 @@ async function openShopDialog(actor) {
       const bulkState = bulkActive ? getBulkOrderState() : null;
       const bulkItems = bulkActive ? getBulkCartDialogItems(bulkState) : [];
       const bulkTotal = bulkActive ? bulkState.totalPrice : 0;
+      const bulkAllConfirmed =
+        bulkActive && bulkState ? areAllBulkOrdersConfirmed(bulkState) : false;
       const dialog = new Dialog({
         title: "Einkaufskorb",
         content: buildCartDialogContent({
@@ -1622,6 +1635,13 @@ async function openShopDialog(actor) {
         }),
         buttons: bulkActive
           ? {
+              checkout: {
+                label: "Zur Kasse",
+                callback: async () => {
+                  await confirmBulkOrder(getBulkOrderState());
+                  return false;
+                },
+              },
               close: {
                 label: "Schließen",
               },
@@ -1663,6 +1683,10 @@ async function openShopDialog(actor) {
       Hooks.once("renderDialog", (app, dialogHtml) => {
         if (app !== dialog) {
           return;
+        }
+        if (bulkActive) {
+          const checkoutButton = dialogHtml.find('button[data-button="checkout"]');
+          checkoutButton.prop("disabled", !bulkAllConfirmed);
         }
         const listElement = dialogHtml.find(".cart-dialog__items");
         const renderCartDialogList = () => {

@@ -454,6 +454,26 @@ function refreshBulkOrderUi() {
 
   const gmDialogs = document.querySelectorAll(".pf2e-general-store-gm");
   gmDialogs.forEach((dialog) => updateGmBulkOrderPanel($(dialog)));
+
+  const cartDialogs = document.querySelectorAll(
+    '.pf2e-general-store-cart-dialog[data-bulk-mode="true"]'
+  );
+  cartDialogs.forEach((dialog) => {
+    const listElement = dialog.querySelector(".cart-dialog__items");
+    const totalElement = dialog.querySelector("[data-cart-dialog-total]");
+    if (!listElement) {
+      return;
+    }
+    const state = getBulkOrderState();
+    if (!state.active) {
+      return;
+    }
+    const items = getBulkCartDialogItems(state);
+    listElement.innerHTML = buildBulkCartDialogItemsHtml(items);
+    if (totalElement) {
+      totalElement.textContent = `${formatGold(state.totalPrice)} gp`;
+    }
+  });
 }
 
 async function updateSearchResults(query, listElement, gmFiltersOverride) {
@@ -1007,21 +1027,111 @@ function buildCartDialogItemsHtml(items) {
     .join("");
 }
 
+function getBulkCartDialogItems(state) {
+  const itemsMap = new Map();
+  const players = Object.entries(state.players ?? {});
+
+  players.forEach(([userId, player]) => {
+    const user = game.users?.get(userId);
+    const character = user?.character;
+    const name = character?.name ?? user?.name ?? player?.name ?? "Unbekannt";
+    const avatar =
+      character?.prototypeToken?.texture?.src ??
+      character?.img ??
+      user?.avatar ??
+      "icons/svg/mystery-man.svg";
+
+    const playerItems = Array.isArray(player?.items) ? player.items : [];
+    playerItems.forEach((item) => {
+      const key = `${item.pack}.${item.itemId}`;
+      const existing = itemsMap.get(key) ?? {
+        key,
+        itemId: item.itemId,
+        pack: item.pack,
+        name: item.name,
+        price: item.price,
+        quantity: 0,
+        players: [],
+      };
+      existing.quantity += item.quantity;
+      existing.players.push({
+        userId,
+        name,
+        avatar,
+        quantity: item.quantity,
+      });
+      itemsMap.set(key, existing);
+    });
+  });
+
+  return Array.from(itemsMap.values());
+}
+
+function buildBulkCartDialogItemsHtml(items) {
+  if (!items.length) {
+    return '<li class="cart-dialog__placeholder">Keine Items im Warenkorb.</li>';
+  }
+  const currentUserId = game.user?.id;
+  return items
+    .map(
+      (item) => `
+        <li class="cart-dialog__item cart-dialog__item--bulk" data-item-key="${item.key}">
+          <div class="cart-dialog__item-main">
+            <span class="cart-dialog__name">${item.name}</span>
+            <ul class="cart-dialog__players">
+              ${item.players
+                .map(
+                  (player) => `
+                    <li class="cart-dialog__player">
+                      <img class="cart-dialog__avatar" src="${player.avatar}" alt="" />
+                      <span class="cart-dialog__player-name">${player.name}</span>
+                      <span class="cart-dialog__player-qty">x${player.quantity}</span>
+                      ${
+                        player.userId === currentUserId
+                          ? `<button class="cart-dialog__bulk-remove" type="button" data-pack="${item.pack}" data-item-id="${item.itemId}">Entfernen</button>`
+                          : ""
+                      }
+                    </li>
+                  `
+                )
+                .join("")}
+            </ul>
+          </div>
+          <span class="cart-dialog__qty-display">x${item.quantity}</span>
+          <span class="cart-dialog__unit">${formatGold(item.price)} gp</span>
+          <span class="cart-dialog__total">${formatGold(
+            item.price * item.quantity
+          )} gp</span>
+        </li>
+      `
+    )
+    .join("");
+}
+
 function buildCartDialogContent({
   actorName,
   actorAvailability,
   partyAvailability,
   items,
   total,
+  isBulkOrder = false,
+  itemsHtml,
 }) {
+  const listHtml = itemsHtml ?? buildCartDialogItemsHtml(items);
   return `
-    <form class="pf2e-general-store-cart-dialog">
+    <form class="pf2e-general-store-cart-dialog" ${
+      isBulkOrder ? 'data-bulk-mode="true"' : ""
+    }>
       <ul class="cart-dialog__items">
-        ${buildCartDialogItemsHtml(items)}
+        ${listHtml}
       </ul>
       <div class="cart-dialog__summary">
         Gesamt: <span data-cart-dialog-total>${formatGold(total)} gp</span>
       </div>
+      ${
+        isBulkOrder
+          ? ""
+          : `
       <fieldset class="form-group">
         <legend>Zahlungsquelle</legend>
         <label class="store-option">
@@ -1039,6 +1149,8 @@ function buildCartDialogContent({
           <span class="store-option__availability">Verfügbar: ${partyAvailability}</span>
         </label>
       </fieldset>
+      `
+      }
     </form>
   `;
 }
@@ -1463,45 +1575,57 @@ async function openShopDialog(actor) {
         ? formatCurrencyInGold(partyCurrency) ?? "Nicht verfügbar"
         : "Nicht verfügbar";
       const actorName = actor?.name ?? "Unbekannter Actor";
+      const bulkActive = isBulkOrderActive();
+      const bulkState = bulkActive ? getBulkOrderState() : null;
+      const bulkItems = bulkActive ? getBulkCartDialogItems(bulkState) : [];
+      const bulkTotal = bulkActive ? bulkState.totalPrice : 0;
       const dialog = new Dialog({
         title: "Einkaufskorb",
         content: buildCartDialogContent({
           actorName,
           actorAvailability,
           partyAvailability,
-          items: getCartItemsArray(),
-          total: getCartTotal(),
+          items: bulkActive ? bulkItems : getCartItemsArray(),
+          total: bulkActive ? bulkTotal : getCartTotal(),
+          isBulkOrder: bulkActive,
+          itemsHtml: bulkActive ? buildBulkCartDialogItemsHtml(bulkItems) : null,
         }),
-        buttons: {
-          checkout: {
-            label: "Zur Kasse",
-            callback: async (dialogHtml) => {
-              const form = dialogHtml[0]?.querySelector("form");
-              if (!form) {
-                return false;
-              }
-              const useActor = form.elements["payment-actor"]?.checked ?? false;
-              const useParty = form.elements["payment-party"]?.checked ?? false;
-              const items = getCartItemsArray();
-              const result = await handleCartCheckout({
-                actor,
-                items,
-                useActor,
-                useParty,
-              });
-              if (!result.ok) {
-                return false;
-              }
-              cartItems.clear();
-              updateCartSummary();
-              return true;
+        buttons: bulkActive
+          ? {
+              close: {
+                label: "Schließen",
+              },
+            }
+          : {
+              checkout: {
+                label: "Zur Kasse",
+                callback: async (dialogHtml) => {
+                  const form = dialogHtml[0]?.querySelector("form");
+                  if (!form) {
+                    return false;
+                  }
+                  const useActor = form.elements["payment-actor"]?.checked ?? false;
+                  const useParty = form.elements["payment-party"]?.checked ?? false;
+                  const items = getCartItemsArray();
+                  const result = await handleCartCheckout({
+                    actor,
+                    items,
+                    useActor,
+                    useParty,
+                  });
+                  if (!result.ok) {
+                    return false;
+                  }
+                  cartItems.clear();
+                  updateCartSummary();
+                  return true;
+                },
+              },
+              close: {
+                label: "Schließen",
+              },
             },
-          },
-          close: {
-            label: "Schließen",
-          },
-        },
-        default: "checkout",
+        default: bulkActive ? "close" : "checkout",
       });
 
       dialog.render(true);
@@ -1512,11 +1636,31 @@ async function openShopDialog(actor) {
         }
         const listElement = dialogHtml.find(".cart-dialog__items");
         const renderCartDialogList = () => {
+          if (bulkActive) {
+            const state = getBulkOrderState();
+            const items = getBulkCartDialogItems(state);
+            listElement.html(buildBulkCartDialogItemsHtml(items));
+            dialogHtml
+              .find("[data-cart-dialog-total]")
+              .text(`${formatGold(state.totalPrice)} gp`);
+            return;
+          }
           listElement.html(buildCartDialogItemsHtml(getCartItemsArray()));
           dialogHtml
             .find("[data-cart-dialog-total]")
             .text(`${formatGold(getCartTotal())} gp`);
         };
+
+        if (bulkActive) {
+          dialogHtml.on("click", ".cart-dialog__bulk-remove", (event) => {
+            const target = $(event.currentTarget);
+            requestBulkOrderAction("removeItem", {
+              itemId: target.data("itemId"),
+              pack: target.data("pack"),
+            });
+          });
+          return;
+        }
 
         dialogHtml.on("click", ".cart-dialog__remove", (event) => {
           const key = $(event.currentTarget)

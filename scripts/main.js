@@ -58,7 +58,6 @@ const SPELL_CONSUMABLE_PRICE_BY_TYPE = {
 const PF2E_SYSTEM_READY = new Promise((resolve) => {
   Hooks.once("ready", () => resolve(true));
 });
-let spellcastingItemCreatorPromise = null;
 
 function debounce(callback, delay = 250) {
   let timeoutId;
@@ -1614,97 +1613,131 @@ function openCartQuantityDialog({ name, priceGold }) {
   });
 }
 
-async function getSpellcastingItemCreator() {
+function getSpellcastingItemConfig(type, rank) {
+  const spellcastingItems = CONFIG?.PF2E?.spellcastingItems ?? {};
+  const itemData = spellcastingItems[type];
+  const uuid = itemData?.compendiumUuids?.[rank] ?? null;
+  if (!itemData || !uuid) {
+    return null;
+  }
+  return { itemData, uuid };
+}
+
+function getDefaultSpellConsumableType() {
+  const spellcastingItems = CONFIG?.PF2E?.spellcastingItems ?? {};
+  if (spellcastingItems.scroll) {
+    return "scroll";
+  }
+  const availableTypes = Object.keys(spellcastingItems);
+  return availableTypes.length ? availableTypes[0] : null;
+}
+
+function getDefaultSpellConsumableRank(spell, type) {
+  const spellRank = getEntryLevel(spell);
+  const ranks = Object.keys(
+    CONFIG?.PF2E?.spellcastingItems?.[type]?.compendiumUuids ?? {}
+  )
+    .map((rank) => Number(rank))
+    .filter((rank) => Number.isFinite(rank))
+    .sort((a, b) => a - b);
+  if (Number.isFinite(spellRank) && ranks.includes(spellRank)) {
+    return spellRank;
+  }
+  return ranks.length ? ranks[0] : spellRank ?? null;
+}
+
+function cloneData(value) {
+  if (typeof foundry?.utils?.deepClone === "function") {
+    return foundry.utils.deepClone(value);
+  }
+  if (typeof structuredClone === "function") {
+    return structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+function getRandomId() {
+  if (typeof foundry?.utils?.randomID === "function") {
+    return foundry.utils.randomID();
+  }
+  if (typeof randomID === "function") {
+    return randomID();
+  }
+  return Math.random().toString(36).slice(2);
+}
+
+async function createConsumableSourceFromSpell(spell, options = {}) {
   await PF2E_SYSTEM_READY;
-  if (!spellcastingItemCreatorPromise) {
-    spellcastingItemCreatorPromise = import(
-      "systems/pf2e/module/item/consumable/apps/spellcasting-item-creator/app.js"
-    )
-      .then((module) => module.SpellcastingItemCreator ?? null)
-      .catch(() => null);
-  }
-  return spellcastingItemCreatorPromise;
-}
-
-async function openSpellcastingItemCreator(spell) {
-  const Creator = await getSpellcastingItemCreator();
-  if (!Creator) {
-    ui.notifications?.error("SpellcastingItemCreator ist nicht verfügbar.");
+  const selectedType = options.type ?? getDefaultSpellConsumableType();
+  const selectedRank =
+    options.rank ?? getDefaultSpellConsumableRank(spell, selectedType);
+  if (!selectedType || selectedRank === null || selectedRank === undefined) {
+    ui.notifications?.error("Kein gültiger Spell-Consumable-Typ/Rang gefunden.");
     return null;
   }
 
-  const openMethods = [
-    "openDialog",
-    "open",
-    "showDialog",
-    "show",
-    "create",
-    "fromSpell",
-  ];
-
-  for (const method of openMethods) {
-    if (typeof Creator[method] === "function") {
-      return Creator[method](spell);
-    }
-  }
-
-  ui.notifications?.error("SpellcastingItemCreator konnte nicht geöffnet werden.");
-  return null;
-}
-
-function extractSpellConsumableResult(result) {
-  if (!result) {
+  const config = getSpellcastingItemConfig(selectedType, selectedRank);
+  if (!config) {
+    ui.notifications?.error("Keine Vorlage für den Spell-Consumable gefunden.");
     return null;
   }
 
-  const submitData =
-    result.submitData ?? result.formData ?? result.data ?? result.submittedData ?? null;
-
-  const consumableSource =
-    result.consumableSource ??
-    result.source ??
-    result.itemSource ??
-    result.consumable?.toObject?.() ??
-    result.item?.toObject?.() ??
-    result.consumable ??
-    result.item ??
-    null;
-
-  if (!consumableSource) {
+  const consumable = await fromUuid(config.uuid);
+  if (!consumable?.toObject) {
+    ui.notifications?.error("Consumable-Vorlage konnte nicht geladen werden.");
     return null;
   }
 
-  const consumableType =
-    submitData?.consumableType ??
-    submitData?.type ??
-    result.consumableType ??
-    result.type ??
-    result.consumable?.type ??
-    consumableSource.type ??
-    null;
+  const consumableSource = consumable.toObject();
+  consumableSource._id = null;
+  consumableSource.system = consumableSource.system ?? {};
 
-  const rank =
-    submitData?.rank ??
-    submitData?.spellRank ??
-    submitData?.level ??
-    result.rank ??
-    result.spellRank ??
-    result.level ??
-    consumableSource.system?.rank ??
-    consumableSource.system?.level ??
-    null;
+  const nameTemplate = config.itemData?.nameTemplate ?? "{name}";
+  consumableSource.name = game.i18n.format(nameTemplate, {
+    name: spell.name ?? "",
+    level: selectedRank,
+  });
 
-  const price = getSpellConsumablePrice({ type: consumableType, rank });
+  const spellTraits = normalizeTraits(spell.system?.traits);
+  const spellRarity = normalizeRarity(spell.system?.traits?.rarity);
+  consumableSource.system.traits = {
+    ...(consumableSource.system.traits ?? {}),
+    value: spellTraits,
+    rarity: spellRarity ?? consumableSource.system?.traits?.rarity,
+  };
 
-  const consumableImg =
-    result.img ?? result.consumable?.img ?? result.item?.img ?? consumableSource.img ?? null;
+  const spellSource = cloneData(spell._source ?? spell.toObject());
+  spellSource._id = getRandomId();
+  const mergedSpellSource = foundry.utils.mergeObject(
+    spellSource,
+    {
+      system: {
+        location: {
+          heightenedLevel: selectedRank,
+        },
+      },
+    },
+    { inplace: false }
+  );
+  consumableSource.system.spell = mergedSpellSource;
+
+  if (spell.system?.description) {
+    consumableSource.system.description = cloneData(spell.system.description);
+  }
+
+  if (options.mystified) {
+    consumableSource.system.identification = {
+      ...(consumableSource.system.identification ?? {}),
+      status: "unidentified",
+    };
+  }
 
   return {
     consumableSource,
-    consumableType,
-    rank,
-    price,
-    consumableImg,
+    consumableType: selectedType,
+    rank: selectedRank,
+    price: getSpellConsumablePrice({ type: selectedType, rank: selectedRank }),
+    consumableImg: consumableSource.img ?? consumable.img ?? null,
   };
 }
 
@@ -1835,8 +1868,7 @@ async function openShopDialog(actor) {
           ui.notifications.error("Spell konnte nicht geladen werden.");
           return;
         }
-        const spellResult = await openSpellcastingItemCreator(spell);
-        spellDetails = extractSpellConsumableResult(spellResult);
+        spellDetails = await createConsumableSourceFromSpell(spell);
         if (!spellDetails) {
           return;
         }

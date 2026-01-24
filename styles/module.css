@@ -123,6 +123,33 @@
   white-space: nowrap;
 }
 
+.pf2e-general-store-dialog .store-result__rarity {
+  align-self: flex-start;
+  background: rgba(46, 82, 138, 0.18);
+  border-radius: 999px;
+  color: rgba(22, 44, 84, 0.9);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.5rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.pf2e-general-store-dialog .store-result__rarity--uncommon {
+  background: rgba(72, 112, 47, 0.18);
+  color: rgba(38, 70, 20, 0.9);
+}
+
+.pf2e-general-store-dialog .store-result__rarity--rare {
+  background: rgba(120, 63, 143, 0.18);
+  color: rgba(72, 32, 92, 0.9);
+}
+
+.pf2e-general-store-dialog .store-result__rarity--unique {
+  background: rgba(163, 90, 32, 0.18);
+  color: rgba(104, 56, 18, 0.9);
+}
+
 .pf2e-general-store-dialog .store-result__trait {
   background: rgba(0, 0, 0, 0.08);
   border-radius: 999px;

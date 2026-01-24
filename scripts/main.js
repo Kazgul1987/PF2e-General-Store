@@ -348,18 +348,22 @@ function isLegacyItem(entry) {
   return false;
 }
 
+const MIN_SEARCH_LENGTH = 2;
+const MAX_SEARCH_RESULTS = 100;
+const SEARCH_RENDER_BATCH_SIZE = 50;
+
 function renderSearchResults(results, listElement) {
+  const renderToken = (listElement.data("renderToken") ?? 0) + 1;
+  listElement.data("renderToken", renderToken);
   listElement.empty();
   if (!results.length) {
     listElement.append('<li class="placeholder">Keine Ergebnisse.</li>');
     return;
   }
 
-  const itemsHtml = results
-    .map(
-      (result) => {
-        const traitsValue = (result.traits ?? []).join("|");
-        return `
+  const buildResultHtml = (result) => {
+    const traitsValue = (result.traits ?? []).join("|");
+    return `
       <li class="store-result" data-item-id="${result.itemId}">
         <button
           class="store-result__button"
@@ -398,11 +402,36 @@ function renderSearchResults(results, listElement) {
         </button>
       </li>
     `;
-      }
-    )
-    .join("");
+  };
 
-  listElement.append(itemsHtml);
+  const renderBatch = (startIndex) => {
+    if (listElement.data("renderToken") !== renderToken) {
+      return;
+    }
+    const slice = results.slice(startIndex, startIndex + SEARCH_RENDER_BATCH_SIZE);
+    const itemsHtml = slice.map(buildResultHtml).join("");
+    listElement.append(itemsHtml);
+    const nextIndex = startIndex + SEARCH_RENDER_BATCH_SIZE;
+    if (nextIndex < results.length) {
+      requestAnimationFrame(() => renderBatch(nextIndex));
+    }
+  };
+
+  if (results.length <= SEARCH_RENDER_BATCH_SIZE) {
+    listElement.append(results.map(buildResultHtml).join(""));
+    return;
+  }
+
+  renderBatch(0);
+}
+
+function updateSearchHint(listElement, message) {
+  const dialog = listElement.closest(".pf2e-general-store-dialog");
+  const hintElement = dialog.find("[data-search-hint]");
+  if (!hintElement.length) {
+    return;
+  }
+  hintElement.text(message ?? "");
 }
 
 function getDescriptionContainer(listElement) {
@@ -514,6 +543,16 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
   if (!searchTerm) {
     renderSearchResults([], listElement);
     resetResultSelection(listElement);
+    updateSearchHint(listElement, "");
+    return;
+  }
+  if (searchTerm.length < MIN_SEARCH_LENGTH) {
+    renderSearchResults([], listElement);
+    resetResultSelection(listElement);
+    updateSearchHint(
+      listElement,
+      `Bitte mindestens ${MIN_SEARCH_LENGTH} Zeichen eingeben.`
+    );
     return;
   }
 
@@ -522,6 +561,7 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
   if (!ITEM_INDEX_CACHE.has("items")) {
     renderSearchLoading(listElement);
     resetResultSelection(listElement);
+    updateSearchHint(listElement, "");
   }
   const itemEntries = await itemEntriesPromise;
 
@@ -541,8 +581,19 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
       itemId: entry._id,
     }));
 
-  renderSearchResults(results, listElement);
+  const isTruncated = results.length > MAX_SEARCH_RESULTS;
+  const limitedResults = isTruncated
+    ? results.slice(0, MAX_SEARCH_RESULTS)
+    : results;
+
+  renderSearchResults(limitedResults, listElement);
   resetResultSelection(listElement);
+  updateSearchHint(
+    listElement,
+    isTruncated
+      ? `Zeige erste ${MAX_SEARCH_RESULTS} Treffer. Bitte Suche weiter eingrenzen.`
+      : ""
+  );
 }
 
 function ensureBulkOrderPlayer(state, userId, userName) {

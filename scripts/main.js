@@ -7,9 +7,12 @@ const SHOW_STORE_BUTTON_SETTING = "showStoreButtonForPlayers";
 const WISHLIST_SETTING = "wishlistState";
 const WISHLIST_CLIENT_SETTING = "wishlistStateClient";
 const PACK_INDEX_CACHE = new Map();
+const SPELL_PACK_INDEX_CACHE = new Map();
 const ITEM_INDEX_CACHE = new Map();
+const SPELL_INDEX_CACHE = new Map();
 const ITEM_DESCRIPTION_CACHE = new Map();
 let itemIndexBuildPromise = null;
+let spellIndexBuildPromise = null;
 const DEFAULT_DESCRIPTION_PLACEHOLDER =
   '<p class="store-description__placeholder">Wähle ein Item aus, um die Beschreibung zu sehen.</p>';
 const DEFAULT_GM_FILTERS = {
@@ -42,6 +45,10 @@ function getItemCompendiumPacks() {
   return game.packs.filter((pack) => pack.documentName === "Item");
 }
 
+function getSpellCompendiumPacks() {
+  return game.packs.filter((pack) => pack.documentName === "Spell");
+}
+
 function getPackIndex(pack) {
   if (!PACK_INDEX_CACHE.has(pack.collection)) {
     PACK_INDEX_CACHE.set(
@@ -62,6 +69,29 @@ function getPackIndex(pack) {
     );
   }
   return PACK_INDEX_CACHE.get(pack.collection);
+}
+
+function getSpellPackIndex(pack) {
+  if (!SPELL_PACK_INDEX_CACHE.has(pack.collection)) {
+    SPELL_PACK_INDEX_CACHE.set(
+      pack.collection,
+      pack.getIndex({
+        fields: [
+          "img",
+          "system.level",
+          "system.rank",
+          "system.publication",
+          "system.remaster",
+          "system.source",
+          "system.traits",
+          "system.ritual",
+          "flags.pf2e.legacy",
+          "type",
+        ],
+      })
+    );
+  }
+  return SPELL_PACK_INDEX_CACHE.get(pack.collection);
 }
 
 async function getCachedItemIndexEntries() {
@@ -91,6 +121,37 @@ async function getCachedItemIndexEntries() {
   })();
 
   return itemIndexBuildPromise;
+}
+
+async function getCachedSpellIndexEntries() {
+  if (SPELL_INDEX_CACHE.has("spells")) {
+    return SPELL_INDEX_CACHE.get("spells");
+  }
+  if (spellIndexBuildPromise) {
+    return spellIndexBuildPromise;
+  }
+
+  spellIndexBuildPromise = (async () => {
+    try {
+      const packs = getSpellCompendiumPacks();
+      const indices = await Promise.all(
+        packs.map((pack) => getSpellPackIndex(pack))
+      );
+      const entries = indices.flatMap((index, indexPosition) =>
+        Array.from(index).map((entry) => ({
+          entry,
+          pack: packs[indexPosition],
+        }))
+      );
+
+      SPELL_INDEX_CACHE.set("spells", entries);
+      return entries;
+    } finally {
+      spellIndexBuildPromise = null;
+    }
+  })();
+
+  return spellIndexBuildPromise;
 }
 
 const ALLOWED_ITEM_TYPES = new Set([
@@ -247,6 +308,7 @@ function normalizeWishlistItem(item = {}) {
   const itemId = typeof item.itemId === "string" ? item.itemId.trim() : "";
   const pack = typeof item.pack === "string" ? item.pack.trim() : "";
   const name = typeof item.name === "string" ? item.name.trim() : "";
+  const entryType = item.entryType === "spell" ? "spell" : "item";
   const price = Number(item.price) || 0;
   const quantity = Number(item.quantity) || 0;
   const players = Array.isArray(item.players)
@@ -261,6 +323,7 @@ function normalizeWishlistItem(item = {}) {
     itemId,
     pack,
     name,
+    entryType,
     price: price > 0 ? price : 0,
     quantity,
     players,
@@ -585,6 +648,21 @@ function normalizeLevel(levelData) {
   return Number.isFinite(levelValue) ? levelValue : null;
 }
 
+function getEntryLevel(entry) {
+  return normalizeLevel(entry?.system?.level ?? entry?.system?.rank);
+}
+
+function isSpellRitual(entry) {
+  const ritualValue = entry?.system?.ritual;
+  if (typeof ritualValue === "boolean") {
+    return ritualValue;
+  }
+  if (typeof ritualValue?.value === "boolean") {
+    return ritualValue.value;
+  }
+  return false;
+}
+
 function parseTraitsInput(value) {
   if (!value) {
     return [];
@@ -656,7 +734,12 @@ function renderSearchResults(results, listElement) {
   }
 
   const buildResultHtml = (result) => {
+    const entryType = result.entryType ?? "item";
+    const isSpell = entryType === "spell";
     const traitsValue = (result.traits ?? []).join("|");
+    const icon =
+      result.icon ?? (isSpell ? "icons/svg/book.svg" : "icons/svg/item-bag.svg");
+    const levelLabel = isSpell ? "Rank" : "Level";
     return `
       <li class="store-result" data-item-id="${result.itemId}">
         <button
@@ -664,18 +747,19 @@ function renderSearchResults(results, listElement) {
           type="button"
           data-pack="${result.pack}"
           data-item-id="${result.itemId}"
+          data-entry-type="${entryType}"
           data-name="${result.name}"
           data-price="${result.priceGold}"
-          data-icon="${result.icon}"
+          data-icon="${icon}"
           data-level="${result.level ?? ""}"
           data-rarity="${result.rarity ?? ""}"
           data-legacy="${result.isLegacy ? "true" : "false"}"
           data-traits="${traitsValue}"
         >
-          <img class="store-result__icon" src="${result.icon}" alt="" />
+          <img class="store-result__icon" src="${icon}" alt="" />
           <span class="store-result__details">
             <span class="store-result__name">${result.name}</span>
-            <span class="store-result__level">Level ${result.level ?? "–"}</span>
+            <span class="store-result__level">${levelLabel} ${result.level ?? "–"}</span>
             ${result.isLegacy ? '<span class="store-result__legacy">Legacy</span>' : ""}
             ${
               result.rarity
@@ -756,7 +840,7 @@ function entryMatchesGmFilters(entry, filters) {
     }
   }
 
-  const level = normalizeLevel(entry.system?.level);
+  const level = getEntryLevel(entry);
   if (normalizedFilters.minLevel !== null) {
     if (level === null || level < normalizedFilters.minLevel) {
       return false;
@@ -815,30 +899,70 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
     return;
   }
 
+  const dialog = listElement.closest(".pf2e-general-store-dialog");
+  const spellFilter = dialog.find('input[name="filter-spell"]');
+  const itemFilter = dialog.find('input[name="filter-item"]');
+  const hasSpellFilter = spellFilter.length ? spellFilter.prop("checked") : false;
+  const hasItemFilter = itemFilter.length ? itemFilter.prop("checked") : false;
+  const showSpells = hasSpellFilter || (!hasSpellFilter && !hasItemFilter);
+  const showItems = hasItemFilter || (!hasSpellFilter && !hasItemFilter);
+
   const gmFilters = gmFiltersOverride ?? getCurrentGmFilters();
-  const itemEntriesPromise = getCachedItemIndexEntries();
-  if (!ITEM_INDEX_CACHE.has("items")) {
+  const itemEntriesPromise = showItems
+    ? getCachedItemIndexEntries()
+    : Promise.resolve([]);
+  const spellEntriesPromise = showSpells
+    ? getCachedSpellIndexEntries()
+    : Promise.resolve([]);
+  if (
+    (showItems && !ITEM_INDEX_CACHE.has("items")) ||
+    (showSpells && !SPELL_INDEX_CACHE.has("spells"))
+  ) {
     renderSearchLoading(listElement);
     resetResultSelection(listElement);
     updateSearchHint(listElement, "");
   }
-  const itemEntries = await itemEntriesPromise;
 
-  const results = itemEntries
+  const [itemEntries, spellEntries] = await Promise.all([
+    itemEntriesPromise,
+    spellEntriesPromise,
+  ]);
+
+  const itemResults = itemEntries
     .filter(({ entry }) => isAllowedItemEntry(entry))
     .filter(({ entry }) => entryMatchesGmFilters(entry, gmFilters))
     .filter(({ entry }) => entry.name?.toLowerCase().includes(searchTerm))
     .map(({ entry, pack }) => ({
+      entryType: "item",
       icon: entry.img ?? "icons/svg/item-bag.svg",
       name: entry.name ?? "",
       priceGold: getPriceInGold(entry),
       traits: normalizeTraits(entry.system?.traits),
-      level: normalizeLevel(entry.system?.level),
+      level: getEntryLevel(entry),
       rarity: normalizeRarity(entry.system?.traits?.rarity),
       isLegacy: isLegacyItem(entry),
       pack: pack.collection,
       itemId: entry._id,
     }));
+
+  const spellResults = spellEntries
+    .filter(({ entry }) => !isSpellRitual(entry))
+    .filter(({ entry }) => entryMatchesGmFilters(entry, gmFilters))
+    .filter(({ entry }) => entry.name?.toLowerCase().includes(searchTerm))
+    .map(({ entry, pack }) => ({
+      entryType: "spell",
+      icon: entry.img ?? "icons/svg/book.svg",
+      name: entry.name ?? "",
+      priceGold: getPriceInGold(entry),
+      traits: normalizeTraits(entry.system?.traits),
+      level: getEntryLevel(entry),
+      rarity: normalizeRarity(entry.system?.traits?.rarity),
+      isLegacy: isLegacyItem(entry),
+      pack: pack.collection,
+      itemId: entry._id,
+    }));
+
+  const results = [...itemResults, ...spellResults];
 
   const isTruncated = results.length > MAX_SEARCH_RESULTS;
   const limitedResults = isTruncated
@@ -1120,7 +1244,9 @@ function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) 
 
 function buildCartItemDetailsHtml(item) {
   const traits = Array.isArray(item.traits) ? item.traits : [];
+  const isSpell = item.entryType === "spell";
   const levelLabel = item.level ?? "–";
+  const levelTitle = isSpell ? "Rank" : "Level";
   const legacyHtml = item.isLegacy
     ? '<span class="store-result__legacy">Legacy</span>'
     : "";
@@ -1134,13 +1260,14 @@ function buildCartItemDetailsHtml(item) {
         .map((trait) => `<span class="store-result__trait">${trait}</span>`)
         .join("")}</span>`
     : "";
-  const icon = item.icon ?? "icons/svg/item-bag.svg";
+  const icon =
+    item.icon ?? (isSpell ? "icons/svg/book.svg" : "icons/svg/item-bag.svg");
   return `
     <div class="cart-dialog__item-info">
       <img class="store-result__icon" src="${icon}" alt="" />
       <span class="store-result__details">
         <span class="store-result__name">${item.name}</span>
-        <span class="store-result__level">Level ${levelLabel}</span>
+        <span class="store-result__level">${levelTitle} ${levelLabel}</span>
         ${legacyHtml}
         ${rarityHtml}
         ${traitsHtml}
@@ -1216,6 +1343,10 @@ async function buildCartItemFromWishlistItem(item) {
   let rarity = null;
   let level = null;
   let isLegacy = false;
+  let entryType = item.entryType === "spell" ? "spell" : "item";
+  if (entryType === "spell") {
+    icon = "icons/svg/book.svg";
+  }
 
   if (pack) {
     const document = await pack.getDocument(item.itemId);
@@ -1223,8 +1354,9 @@ async function buildCartItemFromWishlistItem(item) {
       icon = document.img ?? icon;
       traits = normalizeTraits(document.system?.traits);
       rarity = normalizeRarity(document.system?.traits?.rarity);
-      level = normalizeLevel(document.system?.level);
+      level = getEntryLevel(document);
       isLegacy = isLegacyItem(document);
+      entryType = pack.documentName === "Spell" ? "spell" : entryType;
     }
   }
 
@@ -1237,6 +1369,7 @@ async function buildCartItemFromWishlistItem(item) {
     rarity,
     level,
     isLegacy,
+    entryType,
     price: item.price,
   };
 }
@@ -1466,7 +1599,10 @@ async function openShopDialog(actor) {
       const priceGold = Number(selected.data("price")) || 0;
       const packCollection = selected.data("pack");
       const itemId = selected.data("itemId");
-      const icon = selected.data("icon") ?? "icons/svg/item-bag.svg";
+      const entryType = selected.data("entryType") === "spell" ? "spell" : "item";
+      const icon =
+        selected.data("icon") ??
+        (entryType === "spell" ? "icons/svg/book.svg" : "icons/svg/item-bag.svg");
       const levelValue = selected.data("level");
       const level = Number.isFinite(Number(levelValue)) ? Number(levelValue) : null;
       const rarity = selected.data("rarity") || null;
@@ -1498,6 +1634,7 @@ async function openShopDialog(actor) {
           rarity,
           level,
           isLegacy,
+          entryType,
           price: priceGold,
           quantity,
         });
@@ -1514,6 +1651,7 @@ async function openShopDialog(actor) {
       const priceGold = Number(selected.data("price")) || 0;
       const packCollection = selected.data("pack");
       const itemId = selected.data("itemId");
+      const entryType = selected.data("entryType") === "spell" ? "spell" : "item";
       if (!packCollection || !itemId) {
         ui.notifications.warn("Kein gültiges Item ausgewählt.");
         return;
@@ -1546,6 +1684,7 @@ async function openShopDialog(actor) {
           itemId,
           pack: packCollection,
           name,
+          entryType,
           price: priceGold,
           quantity,
         },
@@ -1762,6 +1901,7 @@ async function openShopDialog(actor) {
     const resultsList = html.find(".store-results ul");
     resultsList.data("actor", actor ?? null);
     void getCachedItemIndexEntries();
+    void getCachedSpellIndexEntries();
     const debouncedSearch = debounce((value) => {
       void updateSearchResults(value, resultsList);
     });
@@ -1769,6 +1909,14 @@ async function openShopDialog(actor) {
     searchInput.on("input", (event) => {
       debouncedSearch(event.currentTarget.value);
     });
+
+    html.on(
+      "change",
+      'input[name="filter-spell"], input[name="filter-item"]',
+      () => {
+        void updateSearchResults(searchInput.val() ?? "", resultsList);
+      }
+    );
 
     setupResultInteractions(resultsList);
 

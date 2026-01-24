@@ -1461,11 +1461,20 @@ async function openShopDialog(actor) {
       if (!Number.isFinite(quantity) || quantity < 1) {
         return;
       }
+      const playerName =
+        actor?.token?.name ??
+        actor?.name ??
+        game.user?.name ??
+        "Unbekannter Spieler";
       const tokenSrc =
-        actor?.prototypeToken?.texture?.src ?? actor?.img ?? game.user?.avatar ?? "";
+        actor?.token?.texture?.src ??
+        actor?.prototypeToken?.texture?.src ??
+        actor?.img ??
+        game.user?.avatar ??
+        "";
       const player = {
         userId: game.user?.id ?? "",
-        name: game.user?.name ?? "Unbekannter Spieler",
+        name: playerName,
         avatar: game.user?.avatar ?? "",
         tokenSrc,
         quantity,

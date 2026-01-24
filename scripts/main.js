@@ -11,6 +11,7 @@ const DEFAULT_GM_FILTERS = {
   traits: [],
   minLevel: null,
   maxLevel: null,
+  rarity: null,
 };
 const DEFAULT_BULK_ORDER = {
   active: false,
@@ -158,7 +159,8 @@ function normalizeRarity(rarityValue) {
   if (!normalized) {
     return null;
   }
-  return normalized;
+  const allowedRarities = new Set(["common", "uncommon", "rare", "unique"]);
+  return allowedRarities.has(normalized) ? normalized : null;
 }
 
 function formatRarityLabel(rarity) {
@@ -194,11 +196,13 @@ function normalizeGmFilters(filters = {}) {
     : Number.isFinite(Number(filters.maxLevel))
       ? Number(filters.maxLevel)
       : null;
+  const rarity = normalizeRarity(filters.rarity);
 
   return {
     traits: normalizedTraits,
     minLevel,
     maxLevel,
+    rarity,
   };
 }
 
@@ -401,6 +405,12 @@ function entryMatchesGmFilters(entry, filters) {
   }
   if (normalizedFilters.maxLevel !== null) {
     if (level === null || level > normalizedFilters.maxLevel) {
+      return false;
+    }
+  }
+  if (normalizedFilters.rarity) {
+    const entryRarity = normalizeRarity(entry.system?.traits?.rarity);
+    if (entryRarity !== normalizedFilters.rarity) {
       return false;
     }
   }
@@ -1250,6 +1260,13 @@ function openGmMenu() {
     traitsInput: formatTraitsInput(filters.traits),
     minLevel: Number.isFinite(filters.minLevel) ? filters.minLevel : "",
     maxLevel: Number.isFinite(filters.maxLevel) ? filters.maxLevel : "",
+    rarityOptions: [
+      { value: "", label: "Keine", selected: !filters.rarity },
+      { value: "common", label: "Common", selected: filters.rarity === "common" },
+      { value: "uncommon", label: "Uncommon", selected: filters.rarity === "uncommon" },
+      { value: "rare", label: "Rare", selected: filters.rarity === "rare" },
+      { value: "unique", label: "Unique", selected: filters.rarity === "unique" },
+    ],
   });
 
   content.then((htmlContent) => {
@@ -1267,6 +1284,7 @@ function openGmMenu() {
             const traitsValue = form.elements["gm-traits"]?.value ?? "";
             const minValue = form.elements["min-level"]?.value ?? "";
             const maxValue = form.elements["max-level"]?.value ?? "";
+            const rarityValue = form.elements["rarity"]?.value ?? "";
             const minLevel = minValue === "" ? null : Number(minValue);
             const maxLevel = maxValue === "" ? null : Number(maxValue);
 
@@ -1274,6 +1292,7 @@ function openGmMenu() {
               traits: parseTraitsInput(traitsValue),
               minLevel: Number.isFinite(minLevel) ? minLevel : null,
               maxLevel: Number.isFinite(maxLevel) ? maxLevel : null,
+              rarity: rarityValue,
             });
             return true;
           },

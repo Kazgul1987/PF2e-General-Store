@@ -1,5 +1,3 @@
-import { SpellcastingItemCreator } from "/systems/pf2e/pf2e.mjs";
-
 const MODULE_ID = "pf2e-general-store";
 const SHOP_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/shop-dialog.hbs`;
 const GM_FILTERS_TEMPLATE = `modules/${MODULE_ID}/templates/gm-filters.hbs`;
@@ -58,8 +56,9 @@ const SPELL_CONSUMABLE_PRICE_BY_TYPE = {
   ]),
 };
 const PF2E_SYSTEM_READY = new Promise((resolve) => {
-  Hooks.once("pf2e.systemReady", () => resolve(true));
+  Hooks.once("ready", () => resolve(true));
 });
+let spellcastingItemCreatorPromise = null;
 
 function debounce(callback, delay = 250) {
   let timeoutId;
@@ -1617,7 +1616,14 @@ function openCartQuantityDialog({ name, priceGold }) {
 
 async function getSpellcastingItemCreator() {
   await PF2E_SYSTEM_READY;
-  return SpellcastingItemCreator ?? null;
+  if (!spellcastingItemCreatorPromise) {
+    spellcastingItemCreatorPromise = import(
+      "systems/pf2e/module/item/consumable/apps/spellcasting-item-creator/app.js"
+    )
+      .then((module) => module.SpellcastingItemCreator ?? null)
+      .catch(() => null);
+  }
+  return spellcastingItemCreatorPromise;
 }
 
 async function openSpellcastingItemCreator(spell) {

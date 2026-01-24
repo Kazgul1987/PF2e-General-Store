@@ -33,10 +33,29 @@
   justify-content: space-between;
 }
 
+.pf2e-general-store-dialog .store-availability {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
 .pf2e-general-store-dialog .store-availability__actor {
   align-items: center;
-  display: inline-flex;
+  display: flex;
   gap: 0.4rem;
+}
+
+.pf2e-general-store-dialog .store-availability__party {
+  align-items: center;
+  display: flex;
+  gap: 0.4rem;
+}
+
+.pf2e-general-store-dialog .store-availability__actor,
+.pf2e-general-store-dialog .store-availability__party {
+  font-size: 0.85rem;
+  line-height: 1.2;
 }
 
 .pf2e-general-store-dialog .store-availability__label {

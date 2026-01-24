@@ -40,7 +40,7 @@
       </div>
       <div class="store-availability">
         <span class="store-availability__label">Verfügbar</span>
-        <span class="store-availability__actor">
+        <div class="store-availability__actor">
           {{#if actorTokenSrc}}
             <img
               class="store-availability__actor-token"
@@ -54,19 +54,16 @@
           {{else}}
             Nicht verfügbar
           {{/if}}
-        </span>
-        <span class="store-availability__separator">·</span>
-        {{#if partyGold}}
-          <span class="store-availability__party">
+        </div>
+        <div class="store-availability__party">
+          {{#if partyGold}}
             <i class="fas fa-users store-availability__icon" aria-hidden="true"></i>
             Party-Stash {{partyGold}}
-          </span>
-        {{else}}
-          <span class="store-availability__party">
+          {{else}}
             <i class="fas fa-users store-availability__icon" aria-hidden="true"></i>
             Party-Stash: Nicht verfügbar
-          </span>
-        {{/if}}
+          {{/if}}
+        </div>
       </div>
     </div>
   </header>

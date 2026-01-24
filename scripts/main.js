@@ -968,56 +968,62 @@ function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) 
     </form>
   `;
 
-  const dialog = new Dialog({
-    title: "Kauf bestätigen",
-    content,
-    buttons: {
-      buy: {
-        label: "Kaufen",
-        callback: (html) => {
-          const form = html[0]?.querySelector("form");
-          if (!form) {
-            return false;
-          }
-          const quantity = Number(form.elements.quantity?.value);
-          const useActor = form.elements["payment-actor"]?.checked ?? false;
-          const useParty = form.elements["payment-party"]?.checked ?? false;
+  const dialog = new Dialog(
+    {
+      title: "Kauf bestätigen",
+      content,
+      buttons: {
+        buy: {
+          label: "Kaufen",
+          callback: (html) => {
+            const form = html[0]?.querySelector("form");
+            if (!form) {
+              return false;
+            }
+            const quantity = Number(form.elements.quantity?.value);
+            const useActor = form.elements["payment-actor"]?.checked ?? false;
+            const useParty = form.elements["payment-party"]?.checked ?? false;
 
-          if (!Number.isFinite(quantity) || quantity < 1) {
-            ui.notifications.warn("Bitte gib eine gültige Menge an.");
-            return false;
-          }
+            if (!Number.isFinite(quantity) || quantity < 1) {
+              ui.notifications.warn("Bitte gib eine gültige Menge an.");
+              return false;
+            }
 
-          if (!useActor && !useParty) {
-            ui.notifications.warn("Bitte wähle eine Zahlungsquelle aus.");
-            return false;
-          }
+            if (!useActor && !useParty) {
+              ui.notifications.warn("Bitte wähle eine Zahlungsquelle aus.");
+              return false;
+            }
 
-          if (useActor && useParty) {
-            ui.notifications.warn("Bitte wähle genau eine Zahlungsquelle aus.");
-            return false;
-          }
+            if (useActor && useParty) {
+              ui.notifications.warn("Bitte wähle genau eine Zahlungsquelle aus.");
+              return false;
+            }
 
-          void handlePurchase({
-            actor,
-            packCollection,
-            itemId,
-            name,
-            priceGold,
-            quantity,
-            useActor,
-            useParty,
-          });
+            void handlePurchase({
+              actor,
+              packCollection,
+              itemId,
+              name,
+              priceGold,
+              quantity,
+              useActor,
+              useParty,
+            });
 
-          return true;
+            return true;
+          },
+        },
+        close: {
+          label: "Abbrechen",
         },
       },
-      close: {
-        label: "Abbrechen",
-      },
+      default: "buy",
     },
-    default: "buy",
-  });
+    {
+      width: 520,
+      height: 420,
+    }
+  );
 
   dialog.render(true);
 }

@@ -1,0 +1,50 @@
+<form class="pf2e-general-store-wishlist-dialog">
+  <div class="wishlist-dialog__summary">
+    <span class="wishlist-dialog__budget">
+      Party-Stash verfügbar: <strong>{{partyGold}}</strong>
+    </span>
+    <span class="wishlist-dialog__total">
+      Gesamtwert: <strong>{{totalValue}}</strong>
+    </span>
+  </div>
+  <ul class="wishlist-dialog__items">
+    {{#if items.length}}
+      {{#each items}}
+        <li class="wishlist-dialog__item" data-item-key="{{key}}">
+          <div class="wishlist-dialog__item-main">
+            {{#if canSelect}}
+              <label class="wishlist-dialog__select">
+                <input
+                  class="wishlist-dialog__select-input"
+                  type="checkbox"
+                  data-item-key="{{key}}"
+                  data-quantity="{{selectQuantity}}"
+                />
+              </label>
+            {{else}}
+              <span class="wishlist-dialog__select-placeholder"></span>
+            {{/if}}
+            <div class="wishlist-dialog__details">
+              <span class="wishlist-dialog__name">{{name}}</span>
+              <span class="wishlist-dialog__meta">Menge: {{quantity}}</span>
+            </div>
+            <span class="wishlist-dialog__price">{{totalLabel}}</span>
+          </div>
+          <div class="wishlist-dialog__players">
+            {{#each players}}
+              <div class="wishlist-dialog__player">
+                {{#if avatarSrc}}
+                  <img class="wishlist-dialog__player-avatar" src="{{avatarSrc}}" alt="{{name}}" />
+                {{/if}}
+                <span class="wishlist-dialog__player-name">{{name}}</span>
+                <span class="wishlist-dialog__player-qty">×{{quantity}}</span>
+              </div>
+            {{/each}}
+          </div>
+        </li>
+      {{/each}}
+    {{else}}
+      <li class="wishlist-dialog__placeholder">Keine Items auf der Wunschliste.</li>
+    {{/if}}
+  </ul>
+</form>

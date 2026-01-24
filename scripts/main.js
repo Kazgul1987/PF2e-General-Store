@@ -30,6 +30,31 @@ let currentPlayerWishlistState = { ...DEFAULT_WISHLIST_STATE };
 const pendingWishlistMutationRequests = new Map();
 const WISHLIST_MUTATION_REQUEST_TIMEOUT_MS = 5000;
 const WISHLIST_OPTIONS_FLAG = "__wishlistOptions";
+const SPELL_CONSUMABLE_PRICE_BY_TYPE = {
+  scroll: new Map([
+    [1, 4],
+    [2, 12],
+    [3, 30],
+    [4, 70],
+    [5, 150],
+    [6, 300],
+    [7, 600],
+    [8, 1300],
+    [9, 3000],
+    [10, 8000],
+  ]),
+  wand: new Map([
+    [1, 60],
+    [2, 160],
+    [3, 360],
+    [4, 700],
+    [5, 1500],
+    [6, 3000],
+    [7, 6500],
+    [8, 15000],
+    [9, 40000],
+  ]),
+};
 
 function debounce(callback, delay = 250) {
   let timeoutId;
@@ -210,12 +235,17 @@ function getPriceInGold(entry) {
   return 0;
 }
 
-function getSpellConsumablePrice(consumableSource) {
-  if (!consumableSource) {
+function getSpellConsumablePrice({ type, rank } = {}) {
+  if (!type || rank === null || rank === undefined) {
     return 0;
   }
-  // TODO: Replace with a centralized spell consumable pricing rule once defined.
-  return getPriceInGold(consumableSource);
+  const normalizedType = typeof type === "string" ? type.toLowerCase() : "";
+  const priceTable = SPELL_CONSUMABLE_PRICE_BY_TYPE[normalizedType];
+  const normalizedRank = Number(rank);
+  if (!priceTable || !Number.isFinite(normalizedRank)) {
+    return 0;
+  }
+  return priceTable.get(normalizedRank) ?? 0;
 }
 
 function formatGold(value) {
@@ -1387,8 +1417,11 @@ function getCartItemPrice(item) {
     return 0;
   }
   if (item.entryType === "spell") {
-    const consumablePrice = getSpellConsumablePrice(item.consumableSource);
-    if (Number.isFinite(consumablePrice)) {
+    const consumablePrice = getSpellConsumablePrice({
+      type: item.consumableType,
+      rank: item.rank,
+    });
+    if (Number.isFinite(consumablePrice) && consumablePrice > 0) {
       return consumablePrice;
     }
   }
@@ -1765,7 +1798,10 @@ async function openShopDialog(actor) {
       }
       const computedPrice =
         entryType === "spell"
-          ? getSpellConsumablePrice(spellDetails?.consumableSource)
+          ? getSpellConsumablePrice({
+              type: spellDetails?.consumableType,
+              rank: spellDetails?.rank,
+            })
           : priceGold;
       const key =
         entryType === "spell"

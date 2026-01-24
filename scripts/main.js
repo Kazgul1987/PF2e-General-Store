@@ -1512,15 +1512,7 @@ function setupResultInteractions(resultsList) {
         price: priceGold,
         name,
       });
-      return;
     }
-    openPurchaseDialog({
-      actor: resultsList.data("actor"),
-      packCollection,
-      itemId,
-      name,
-      priceGold,
-    });
   });
 }
 

@@ -3,6 +3,7 @@ const SHOP_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/shop-dialog.hbs`;
 const GM_FILTERS_TEMPLATE = `modules/${MODULE_ID}/templates/gm-filters.hbs`;
 const GM_FILTERS_SETTING = "gmFilters";
 const SHOW_STORE_BUTTON_SETTING = "showStoreButtonForPlayers";
+const WISHLIST_SETTING = "wishlistState";
 const PACK_INDEX_CACHE = new Map();
 const ITEM_INDEX_CACHE = new Map();
 const ITEM_DESCRIPTION_CACHE = new Map();
@@ -15,7 +16,11 @@ const DEFAULT_GM_FILTERS = {
   maxLevel: null,
   rarity: null,
 };
+const DEFAULT_WISHLIST_STATE = {
+  items: {},
+};
 let currentGmFilters = { ...DEFAULT_GM_FILTERS };
+let currentWishlistState = { ...DEFAULT_WISHLIST_STATE };
 
 function debounce(callback, delay = 250) {
   let timeoutId;
@@ -210,6 +215,187 @@ function normalizeGmFilters(filters = {}) {
     maxLevel,
     rarity,
   };
+}
+
+function normalizeWishlistPlayer(player = {}) {
+  const userId = typeof player.userId === "string" ? player.userId.trim() : "";
+  const name = typeof player.name === "string" ? player.name.trim() : "";
+  const avatar = typeof player.avatar === "string" ? player.avatar.trim() : "";
+  const tokenSrc = typeof player.tokenSrc === "string" ? player.tokenSrc.trim() : "";
+  const quantity = Number(player.quantity) || 0;
+
+  if (!userId && !name) {
+    return null;
+  }
+
+  return {
+    userId,
+    name,
+    avatar,
+    tokenSrc,
+    quantity: quantity > 0 ? quantity : 0,
+  };
+}
+
+function normalizeWishlistItem(item = {}) {
+  const itemId = typeof item.itemId === "string" ? item.itemId.trim() : "";
+  const pack = typeof item.pack === "string" ? item.pack.trim() : "";
+  const name = typeof item.name === "string" ? item.name.trim() : "";
+  const price = Number(item.price) || 0;
+  const quantity = Number(item.quantity) || 0;
+  const players = Array.isArray(item.players)
+    ? item.players.map(normalizeWishlistPlayer).filter(Boolean)
+    : [];
+
+  if (!itemId || !pack || !name || quantity <= 0) {
+    return null;
+  }
+
+  return {
+    itemId,
+    pack,
+    name,
+    price: price > 0 ? price : 0,
+    quantity,
+    players,
+  };
+}
+
+function normalizeWishlistState(state = {}) {
+  const items = {};
+  if (state && typeof state === "object" && state.items && typeof state.items === "object") {
+    Object.entries(state.items).forEach(([key, value]) => {
+      const normalized = normalizeWishlistItem(value);
+      if (normalized) {
+        items[key] = normalized;
+      }
+    });
+  }
+  return { items };
+}
+
+function calculateWishlistTotal(state) {
+  const wishlistState = normalizeWishlistState(state);
+  return Object.values(wishlistState.items).reduce(
+    (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
+    0
+  );
+}
+
+function getWishlistState() {
+  return normalizeWishlistState(
+    game.settings?.get(MODULE_ID, WISHLIST_SETTING) ?? currentWishlistState
+  );
+}
+
+async function setWishlistState(state) {
+  const normalized = normalizeWishlistState(state);
+  currentWishlistState = normalized;
+  await game.settings.set(MODULE_ID, WISHLIST_SETTING, normalized);
+  game.socket?.emit(`module.${MODULE_ID}`, {
+    type: "wishlistUpdate",
+    state: normalized,
+    total: calculateWishlistTotal(normalized),
+  });
+  return normalized;
+}
+
+function isWishlistEmpty(state) {
+  const wishlistState = normalizeWishlistState(state);
+  return Object.keys(wishlistState.items).length === 0;
+}
+
+function addWishlistItem(state, item, player) {
+  const wishlistState = normalizeWishlistState(state);
+  const normalizedItem = normalizeWishlistItem(item);
+  if (!normalizedItem) {
+    return { state: wishlistState, total: calculateWishlistTotal(wishlistState) };
+  }
+  const key = `${normalizedItem.pack}.${normalizedItem.itemId}`;
+  const existing = wishlistState.items[key];
+  if (existing) {
+    existing.quantity += normalizedItem.quantity;
+    existing.price = normalizedItem.price;
+    existing.name = normalizedItem.name;
+    if (player) {
+      const normalizedPlayer = normalizeWishlistPlayer(player);
+      if (normalizedPlayer) {
+        const existingPlayer = existing.players.find(
+          (entry) => entry.userId === normalizedPlayer.userId
+        );
+        if (existingPlayer) {
+          existingPlayer.quantity += normalizedPlayer.quantity;
+        } else {
+          existing.players.push(normalizedPlayer);
+        }
+      }
+    }
+    wishlistState.items[key] = existing;
+  } else {
+    const players = [];
+    const normalizedPlayer = normalizeWishlistPlayer(player);
+    if (normalizedPlayer) {
+      players.push(normalizedPlayer);
+    }
+    wishlistState.items[key] = { ...normalizedItem, players };
+  }
+  return { state: wishlistState, total: calculateWishlistTotal(wishlistState) };
+}
+
+function removeWishlistItem(state, key) {
+  const wishlistState = normalizeWishlistState(state);
+  if (key && wishlistState.items[key]) {
+    delete wishlistState.items[key];
+  }
+  return { state: wishlistState, total: calculateWishlistTotal(wishlistState) };
+}
+
+function setWishlistItemQuantity(state, key, quantity) {
+  const wishlistState = normalizeWishlistState(state);
+  if (!key || !wishlistState.items[key]) {
+    return { state: wishlistState, total: calculateWishlistTotal(wishlistState) };
+  }
+  const nextQuantity = Number(quantity) || 0;
+  if (nextQuantity <= 0) {
+    delete wishlistState.items[key];
+  } else {
+    wishlistState.items[key].quantity = nextQuantity;
+  }
+  return { state: wishlistState, total: calculateWishlistTotal(wishlistState) };
+}
+
+function moveWishlistItemToCart(state, key, quantity) {
+  const wishlistState = normalizeWishlistState(state);
+  const item = wishlistState.items[key];
+  if (!item) {
+    return { state: wishlistState, total: calculateWishlistTotal(wishlistState), moved: null };
+  }
+  const moveQuantity = Number(quantity) || item.quantity;
+  const moved = { ...item, quantity: Math.min(moveQuantity, item.quantity) };
+  const remaining = item.quantity - moved.quantity;
+  if (remaining <= 0) {
+    delete wishlistState.items[key];
+  } else {
+    wishlistState.items[key].quantity = remaining;
+  }
+  return { state: wishlistState, total: calculateWishlistTotal(wishlistState), moved };
+}
+
+const WISHLIST_MUTATIONS = {
+  addItem: addWishlistItem,
+  removeItem: removeWishlistItem,
+  setQuantity: setWishlistItemQuantity,
+  moveToCart: moveWishlistItemToCart,
+};
+
+async function applyWishlistMutation(type, ...args) {
+  const mutation = WISHLIST_MUTATIONS[type];
+  if (!mutation) {
+    return null;
+  }
+  const result = mutation(getWishlistState(), ...args);
+  await setWishlistState(result.state);
+  return result;
 }
 
 function normalizeLevel(levelData) {
@@ -1442,12 +1628,20 @@ Hooks.once("init", () => {
     type: Object,
     default: DEFAULT_GM_FILTERS,
   });
+  game.settings.register(MODULE_ID, WISHLIST_SETTING, {
+    name: "General Store Wishlist",
+    scope: "world",
+    config: false,
+    type: Object,
+    default: DEFAULT_WISHLIST_STATE,
+  });
   invalidateCompendiumCaches();
   registerPF2eGeneralStore();
 });
 
 Hooks.once("ready", () => {
   currentGmFilters = getCurrentGmFilters();
+  currentWishlistState = getWishlistState();
   Hooks.on("updateCompendium", invalidateCompendiumCaches);
   Hooks.on("createCompendium", invalidateCompendiumCaches);
   Hooks.on("deleteCompendium", invalidateCompendiumCaches);
@@ -1455,6 +1649,10 @@ Hooks.once("ready", () => {
     if (payload?.type === "gmFiltersUpdate") {
       currentGmFilters = normalizeGmFilters(payload.filters ?? {});
       refreshOpenStoreDialogs();
+      return;
+    }
+    if (payload?.type === "wishlistUpdate") {
+      currentWishlistState = normalizeWishlistState(payload.state ?? {});
       return;
     }
   });

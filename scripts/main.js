@@ -1405,6 +1405,15 @@ async function handleCartCheckout({ actor, items, useActor, useParty }) {
 
   const itemDocuments = new Map();
   for (const item of items) {
+    if (item.entryType === "spell") {
+      if (!item.consumableSource) {
+        ui.notifications.error(
+          `Keine Consumable-Quelle für ${item.name ?? "Spell"} vorhanden.`
+        );
+        return { ok: false };
+      }
+      continue;
+    }
     const pack = game.packs.get(item.pack);
     if (!pack) {
       ui.notifications.error("Compendium nicht gefunden.");
@@ -1431,6 +1440,21 @@ async function handleCartCheckout({ actor, items, useActor, useParty }) {
   }
 
   for (const item of items) {
+    if (item.entryType === "spell") {
+      const source =
+        foundry?.utils?.deepClone?.(item.consumableSource) ??
+        (typeof structuredClone === "function"
+          ? structuredClone(item.consumableSource)
+          : JSON.parse(JSON.stringify(item.consumableSource)));
+      if (!source) {
+        continue;
+      }
+      delete source._id;
+      source.system = source.system ?? {};
+      source.system.quantity = item.quantity;
+      await actor.createEmbeddedDocuments("Item", [source]);
+      continue;
+    }
     const itemDocument = itemDocuments.get(item.key);
     if (!itemDocument) {
       continue;
@@ -1503,6 +1527,86 @@ function openCartQuantityDialog({ name, priceGold }) {
 
     dialog.render(true);
   });
+}
+
+function getSpellcastingItemCreator() {
+  return (
+    globalThis.SpellcastingItemCreator ??
+    game.pf2e?.applications?.SpellcastingItemCreator ??
+    game.pf2e?.SpellcastingItemCreator ??
+    null
+  );
+}
+
+async function openSpellcastingItemCreator(spell) {
+  const Creator = getSpellcastingItemCreator();
+  if (!Creator) {
+    ui.notifications?.error("SpellcastingItemCreator ist nicht verfügbar.");
+    return null;
+  }
+
+  const openMethods = [
+    "openDialog",
+    "open",
+    "showDialog",
+    "show",
+    "create",
+    "fromSpell",
+  ];
+
+  for (const method of openMethods) {
+    if (typeof Creator[method] === "function") {
+      return Creator[method](spell);
+    }
+  }
+
+  ui.notifications?.error("SpellcastingItemCreator konnte nicht geöffnet werden.");
+  return null;
+}
+
+function extractSpellConsumableResult(result) {
+  if (!result) {
+    return null;
+  }
+
+  const consumableSource =
+    result.consumableSource ??
+    result.source ??
+    result.itemSource ??
+    result.consumable?.toObject?.() ??
+    result.item?.toObject?.() ??
+    result.consumable ??
+    result.item ??
+    null;
+
+  if (!consumableSource) {
+    return null;
+  }
+
+  const consumableType =
+    result.consumableType ??
+    result.type ??
+    result.consumable?.type ??
+    consumableSource.type ??
+    null;
+
+  const rank =
+    result.rank ??
+    result.spellRank ??
+    result.level ??
+    consumableSource.system?.rank ??
+    consumableSource.system?.level ??
+    null;
+
+  const consumableImg =
+    result.img ?? result.consumable?.img ?? result.item?.img ?? consumableSource.img ?? null;
+
+  return {
+    consumableSource,
+    consumableType,
+    rank,
+    consumableImg,
+  };
 }
 
 function setupResultInteractions(resultsList) {
@@ -1620,7 +1724,28 @@ async function openShopDialog(actor) {
       if (!Number.isFinite(quantity) || quantity < 1) {
         return;
       }
-      const key = `${packCollection}.${itemId}`;
+      let spellDetails = null;
+      if (entryType === "spell") {
+        const pack = game.packs.get(packCollection);
+        if (!pack) {
+          ui.notifications.error("Compendium nicht gefunden.");
+          return;
+        }
+        const spell = await pack.getDocument(itemId);
+        if (!spell) {
+          ui.notifications.error("Spell konnte nicht geladen werden.");
+          return;
+        }
+        const spellResult = await openSpellcastingItemCreator(spell);
+        spellDetails = extractSpellConsumableResult(spellResult);
+        if (!spellDetails) {
+          return;
+        }
+      }
+      const key =
+        entryType === "spell"
+          ? `${packCollection}.${itemId}.${spellDetails?.consumableType ?? "spell"}.${spellDetails?.rank ?? "rank"}`
+          : `${packCollection}.${itemId}`;
       const existing = cartItems.get(key);
       if (existing) {
         existing.quantity += quantity;
@@ -1629,12 +1754,17 @@ async function openShopDialog(actor) {
           itemId,
           pack: packCollection,
           name,
-          icon,
+          icon: spellDetails?.consumableImg ?? icon,
           traits,
           rarity,
           level,
           isLegacy,
           entryType,
+          spellId: entryType === "spell" ? itemId : null,
+          spellPack: entryType === "spell" ? packCollection : null,
+          consumableSource: spellDetails?.consumableSource ?? null,
+          consumableType: spellDetails?.consumableType ?? null,
+          rank: spellDetails?.rank ?? null,
           price: priceGold,
           quantity,
         });

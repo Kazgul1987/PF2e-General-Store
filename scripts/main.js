@@ -1021,7 +1021,6 @@ function buildCartDialogItemsHtml(items) {
         <li class="cart-dialog__item" data-item-key="${item.key}">
           <span class="cart-dialog__name">${item.name}</span>
           <input class="cart-dialog__qty" type="number" min="1" value="${item.quantity}" />
-          <span class="cart-dialog__unit">${formatGold(item.price)} gp</span>
           <span class="cart-dialog__total">${formatGold(
             item.price * item.quantity
           )} gp</span>
@@ -1111,7 +1110,6 @@ function buildBulkCartDialogItemsHtml(items) {
             </ul>
           </div>
           <span class="cart-dialog__qty-display">x${item.quantity}</span>
-          <span class="cart-dialog__unit">${formatGold(item.price)} gp</span>
           <span class="cart-dialog__total">${formatGold(
             item.price * item.quantity
           )} gp</span>

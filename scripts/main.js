@@ -22,6 +22,8 @@ const DEFAULT_WISHLIST_STATE = {
 };
 let currentGmFilters = { ...DEFAULT_GM_FILTERS };
 let currentWishlistState = { ...DEFAULT_WISHLIST_STATE };
+const pendingWishlistMutationRequests = new Map();
+const WISHLIST_MUTATION_REQUEST_TIMEOUT_MS = 5000;
 
 function debounce(callback, delay = 250) {
   let timeoutId;
@@ -317,6 +319,9 @@ function getWishlistState() {
 
 async function setWishlistState(state) {
   const normalized = normalizeWishlistState(state);
+  if (!game.user?.isGM) {
+    return normalized;
+  }
   currentWishlistState = normalized;
   await game.settings.set(MODULE_ID, WISHLIST_SETTING, normalized);
   game.socket?.emit(`module.${MODULE_ID}`, {
@@ -451,14 +456,58 @@ const WISHLIST_MUTATIONS = {
   movePlayerToCart: moveWishlistPlayerToCart,
 };
 
-async function applyWishlistMutation(type, ...args) {
+function getWishlistMutation(type) {
   const mutation = WISHLIST_MUTATIONS[type];
+  return typeof mutation === "function" ? mutation : null;
+}
+
+function getWishlistMutationRequestId() {
+  if (typeof foundry?.utils?.randomID === "function") {
+    return foundry.utils.randomID();
+  }
+  if (typeof randomID === "function") {
+    return randomID();
+  }
+  return Math.random().toString(36).slice(2);
+}
+
+async function applyWishlistMutationAsGm(type, ...args) {
+  const mutation = getWishlistMutation(type);
   if (!mutation) {
     return null;
   }
   const result = mutation(getWishlistState(), ...args);
   await setWishlistState(result.state);
   return result;
+}
+
+function requestWishlistMutation(type, args) {
+  if (!game.socket) {
+    ui.notifications?.warn("Wishlist-Synchronisation nicht verfügbar.");
+    return Promise.resolve(null);
+  }
+  const requestId = getWishlistMutationRequestId();
+  return new Promise((resolve) => {
+    const timeoutId = setTimeout(() => {
+      pendingWishlistMutationRequests.delete(requestId);
+      ui.notifications?.warn("Wishlist-Aktualisierung dauert zu lange.");
+      resolve(null);
+    }, WISHLIST_MUTATION_REQUEST_TIMEOUT_MS);
+    pendingWishlistMutationRequests.set(requestId, { resolve, timeoutId });
+    game.socket.emit(`module.${MODULE_ID}`, {
+      type: "wishlistMutationRequest",
+      requestId,
+      mutationType: type,
+      args,
+    });
+  });
+}
+
+async function applyWishlistMutation(type, ...args) {
+  if (game.user?.isGM) {
+    return applyWishlistMutationAsGm(type, ...args);
+  }
+  return requestWishlistMutation(type, args);
 }
 
 function normalizeLevel(levelData) {
@@ -1549,20 +1598,19 @@ async function openShopDialog(actor) {
                 ui.notifications.warn("Bitte wähle mindestens ein Item aus.");
                 return false;
               }
-              let updatedState = getWishlistState();
               for (const selection of selections) {
                 const key = selection.dataset.itemKey;
                 const quantity = Number(selection.dataset.quantity) || 0;
-                if (!key || !updatedState.items[key]) {
+                if (!key || quantity <= 0) {
                   continue;
                 }
-                const { moved, state } = moveWishlistPlayerToCart(
-                  updatedState,
+                const result = await applyWishlistMutation(
+                  "movePlayerToCart",
                   key,
                   currentUserId,
                   quantity
                 );
-                updatedState = state;
+                const moved = result?.moved ?? null;
                 if (!moved) {
                   continue;
                 }
@@ -1579,7 +1627,6 @@ async function openShopDialog(actor) {
                   });
                 }
               }
-              await setWishlistState(updatedState);
               updateCartSummary();
               return true;
             },
@@ -1870,6 +1917,38 @@ Hooks.once("ready", () => {
     if (payload?.type === "wishlistUpdate") {
       currentWishlistState = normalizeWishlistState(payload.state ?? {});
       return;
+    }
+    if (payload?.type === "wishlistMutationResult") {
+      const requestId = payload.requestId;
+      if (!requestId || !pendingWishlistMutationRequests.has(requestId)) {
+        return;
+      }
+      const pending = pendingWishlistMutationRequests.get(requestId);
+      pendingWishlistMutationRequests.delete(requestId);
+      if (pending?.timeoutId) {
+        clearTimeout(pending.timeoutId);
+      }
+      pending?.resolve?.(payload.result ?? null);
+      return;
+    }
+    if (payload?.type === "wishlistMutationRequest") {
+      if (!game.user?.isGM) {
+        return;
+      }
+      const requestId = payload.requestId;
+      const mutationType = payload.mutationType;
+      const args = Array.isArray(payload.args) ? payload.args : [];
+      if (!requestId || typeof mutationType !== "string") {
+        return;
+      }
+      void (async () => {
+        const result = await applyWishlistMutationAsGm(mutationType, ...args);
+        game.socket?.emit(`module.${MODULE_ID}`, {
+          type: "wishlistMutationResult",
+          requestId,
+          result,
+        });
+      })();
     }
   });
 });

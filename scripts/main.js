@@ -1607,6 +1607,7 @@ function setupResultInteractions(resultsList) {
 
 async function openShopDialog(actor) {
   const actorName = actor?.name ?? "Unbekannter Actor";
+  const actorTokenSrc = actor?.prototypeToken?.texture?.src ?? actor?.img ?? null;
   const { currency: actorCurrency } = getActorCurrency(actor);
   const actorGold = formatCurrencyInGold(actorCurrency);
   const partyActor = getPartyStashActor();
@@ -1614,6 +1615,7 @@ async function openShopDialog(actor) {
   const partyGold = partyActor ? formatCurrencyInGold(partyCurrency) : null;
   const content = await renderTemplate(SHOP_DIALOG_TEMPLATE, {
     actorName,
+    actorTokenSrc,
     actorGold,
     partyGold,
   });

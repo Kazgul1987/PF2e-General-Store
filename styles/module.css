@@ -21,10 +21,22 @@
 }
 
 .pf2e-general-store-dialog .store-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.pf2e-general-store-dialog .store-controls__row {
   align-items: center;
   display: flex;
   gap: 1rem;
   justify-content: space-between;
+}
+
+.pf2e-general-store-dialog .store-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
 }
 
 .pf2e-general-store-dialog .store-filters {

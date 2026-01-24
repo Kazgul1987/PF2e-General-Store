@@ -675,6 +675,14 @@ function formatCurrencyDisplay(currency) {
   return parts.join(" ");
 }
 
+function formatCurrencyInGold(currency) {
+  if (!currency) {
+    return null;
+  }
+  const totalCopper = getCurrencyInCopper(currency);
+  return `${formatGold(totalCopper / 100)} gp`;
+}
+
 function getPartyStashActor() {
   if (game.party) {
     return game.party;
@@ -878,14 +886,15 @@ async function confirmBulkOrder(state) {
 
 function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) {
   const { currency: actorCurrency } = getActorCurrency(actor);
-  const actorCurrencyDisplay = formatCurrencyDisplay(actorCurrency);
+  const actorCurrencyDisplay = formatCurrencyInGold(actorCurrency);
   const partyActor = getPartyStashActor();
   const { currency: partyCurrency } = getActorCurrency(partyActor);
-  const partyCurrencyDisplay = partyActor ? formatCurrencyDisplay(partyCurrency) : null;
+  const partyCurrencyDisplay = partyActor ? formatCurrencyInGold(partyCurrency) : null;
   const partyAvailability = partyActor
     ? partyCurrencyDisplay ?? "Nicht verfügbar"
     : "Nicht verfügbar";
   const actorAvailability = actorCurrencyDisplay ?? "Nicht verfügbar";
+  const actorName = actor?.name ?? "Unbekannter Actor";
   const content = `
     <form class="pf2e-general-store-purchase">
       <p class="purchase-title">${name}</p>
@@ -899,7 +908,7 @@ function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) 
         <label class="store-option">
           <span class="store-option__row">
             <input type="checkbox" name="payment-actor" />
-            <span>Gold vom Actor</span>
+            <span>${actorName}</span>
           </span>
           <span class="store-option__availability">Verfügbar: ${actorAvailability}</span>
         </label>

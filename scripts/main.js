@@ -275,6 +275,199 @@ function isRuneItem(item) {
   return true;
 }
 
+function getPropertyRuneKeys(target) {
+  const candidateKeys = Object.keys(target?.system ?? {}).filter((key) =>
+    key.startsWith("propertyRune")
+  );
+  if (candidateKeys.length > 0) {
+    return candidateKeys.sort((a, b) => {
+      const aIndex = Number(a.replace("propertyRune", ""));
+      const bIndex = Number(b.replace("propertyRune", ""));
+      return aIndex - bIndex;
+    });
+  }
+  return ["propertyRune1", "propertyRune2", "propertyRune3", "propertyRune4"];
+}
+
+function isRuneSlotEmpty(slotValue) {
+  if (slotValue === null || slotValue === undefined) {
+    return true;
+  }
+  if (typeof slotValue === "string") {
+    return slotValue.trim().length === 0;
+  }
+  if (typeof slotValue === "object") {
+    if ("value" in slotValue) {
+      const value = slotValue.value;
+      if (value === null || value === undefined) {
+        return true;
+      }
+      if (typeof value === "string") {
+        return value.trim().length === 0;
+      }
+    }
+    return Object.keys(slotValue).length === 0;
+  }
+  return false;
+}
+
+function normalizeRuneValue(value) {
+  if (value && typeof value === "object") {
+    return foundry.utils.deepClone(value);
+  }
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return { value };
+}
+
+function getRuneValue(rune, fields) {
+  for (const field of fields) {
+    if (rune?.system?.[field] !== undefined) {
+      return normalizeRuneValue(rune.system[field]);
+    }
+  }
+  return null;
+}
+
+async function applyRuneToItem(rune, target) {
+  const i18n = game.i18n;
+  if (!isRuneItem(rune) || !target?.isOfType?.("physical")) {
+    ui.notifications.warn(i18n.localize("PF2EGeneralStore.EtchRunesInvalidData"));
+    return false;
+  }
+
+  const runeType = rune.system?.runeType;
+  if (!runeType) {
+    ui.notifications.warn(
+      i18n.localize("PF2EGeneralStore.EtchRunesUnknownRuneType")
+    );
+    return false;
+  }
+
+  const runeTraits = normalizeTraits(rune.system?.traits);
+  const isWeaponRune = runeTraits.includes("weapon");
+  const isArmorRune = runeTraits.includes("armor");
+  const isWeaponTarget = target.isOfType?.("weapon");
+  const isArmorTarget = target.isOfType?.("armor", "shield");
+
+  if (isWeaponRune && !isWeaponTarget) {
+    ui.notifications.warn(
+      i18n.localize("PF2EGeneralStore.EtchRunesIncompatible")
+    );
+    return false;
+  }
+
+  if (isArmorRune && !isArmorTarget) {
+    ui.notifications.warn(
+      i18n.localize("PF2EGeneralStore.EtchRunesIncompatible")
+    );
+    return false;
+  }
+
+  const updateData = {};
+  switch (runeType) {
+    case "potency": {
+      const potencyValue = getRuneValue(rune, [
+        "potencyRune",
+        "potency",
+        "value",
+      ]);
+      if (!potencyValue) {
+        ui.notifications.warn(
+          i18n.localize("PF2EGeneralStore.EtchRunesMissingRuneData")
+        );
+        return false;
+      }
+      updateData["system.potencyRune"] = potencyValue;
+      break;
+    }
+    case "striking": {
+      if (!isWeaponTarget) {
+        ui.notifications.warn(
+          i18n.localize("PF2EGeneralStore.EtchRunesIncompatible")
+        );
+        return false;
+      }
+      const strikingValue = getRuneValue(rune, [
+        "strikingRune",
+        "striking",
+        "value",
+      ]);
+      if (!strikingValue) {
+        ui.notifications.warn(
+          i18n.localize("PF2EGeneralStore.EtchRunesMissingRuneData")
+        );
+        return false;
+      }
+      updateData["system.strikingRune"] = strikingValue;
+      break;
+    }
+    case "resilient": {
+      if (!isArmorTarget) {
+        ui.notifications.warn(
+          i18n.localize("PF2EGeneralStore.EtchRunesIncompatible")
+        );
+        return false;
+      }
+      const resilientValue = getRuneValue(rune, [
+        "resilientRune",
+        "resilient",
+        "value",
+      ]);
+      if (!resilientValue) {
+        ui.notifications.warn(
+          i18n.localize("PF2EGeneralStore.EtchRunesMissingRuneData")
+        );
+        return false;
+      }
+      updateData["system.resilientRune"] = resilientValue;
+      break;
+    }
+    case "property": {
+      const propertyValue = getRuneValue(rune, [
+        "propertyRune",
+        "property",
+        "value",
+        "slug",
+      ]);
+      if (!propertyValue) {
+        ui.notifications.warn(
+          i18n.localize("PF2EGeneralStore.EtchRunesMissingRuneData")
+        );
+        return false;
+      }
+      const propertyKeys = getPropertyRuneKeys(target);
+      const freeKey = propertyKeys.find((key) =>
+        isRuneSlotEmpty(target.system?.[key])
+      );
+      if (!freeKey) {
+        ui.notifications.warn(
+          i18n.localize("PF2EGeneralStore.EtchRunesNoFreeSlot")
+        );
+        return false;
+      }
+      updateData[`system.${freeKey}`] = propertyValue;
+      break;
+    }
+    default: {
+      ui.notifications.warn(
+        i18n.localize("PF2EGeneralStore.EtchRunesUnknownRuneType")
+      );
+      return false;
+    }
+  }
+
+  await target.update(updateData);
+  ui.notifications.info(
+    i18n.format("PF2EGeneralStore.EtchRunesApplied", {
+      rune: rune.name,
+      target: target.name,
+    })
+  );
+  return true;
+}
+
 function openEtchRunesDialog({ actor, rune } = {}) {
   const i18n = game.i18n;
   if (!actor || !rune) {
@@ -331,7 +524,7 @@ function openEtchRunesDialog({ actor, rune } = {}) {
     buttons: {
       confirm: {
         label: i18n.localize("PF2EGeneralStore.EtchRunesConfirm"),
-        callback: (html) => {
+        callback: async (html) => {
           const selectedId = html
             .find('input[name="etch-target"]:checked')
             .val();
@@ -348,13 +541,7 @@ function openEtchRunesDialog({ actor, rune } = {}) {
             );
             return false;
           }
-          ui.notifications.info(
-            i18n.format("PF2EGeneralStore.EtchRunesPlaceholder", {
-              rune: rune.name,
-              target: targetItem.name,
-            })
-          );
-          return true;
+          return applyRuneToItem(rune, targetItem);
         },
       },
       cancel: {

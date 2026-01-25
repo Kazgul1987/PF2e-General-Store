@@ -2479,6 +2479,37 @@ function addActorSheetHeaderControl(app, html) {
   header.find(".window-title").after(button);
 }
 
+function addEtchRunesItemControl(sheet, html) {
+  if (!sheet.isEditable) {
+    return;
+  }
+
+  html.find('li[data-item-id] .item-controls:not(.readonly)').each((_index, element) => {
+    const controls = $(element);
+    if (controls.find('[data-action="etch-runes"]').length) {
+      return;
+    }
+
+    const button = $(`
+      <a class="pf2e-general-store-etch-runes" data-action="etch-runes" data-tooltip="PF2EGeneralStore.EtchRunes">
+        <i class="fa-solid fa-wand-sparkles fa-fw"></i>
+      </a>
+    `);
+
+    controls.append(button);
+  });
+
+  html.on("click", 'a[data-action="etch-runes"]', async (event) => {
+    const itemId = $(event.currentTarget).closest("li[data-item-id]").data("itemId");
+    const item = sheet.actor?.items?.get(itemId);
+    if (!item?.isOfType("physical")) {
+      return;
+    }
+
+    ui.notifications.info(game.i18n.localize("PF2EGeneralStore.EtchRunes"));
+  });
+}
+
 function addGmControlsButton(app, html) {
   if (!game.user?.isGM) {
     return;
@@ -2572,6 +2603,7 @@ function invalidateCompendiumCaches() {
 export function registerPF2eGeneralStore() {
   Hooks.on("renderActorSheet", addActorSheetHeaderControl);
   Hooks.on("renderActorSheetPF2e", addActorSheetHeaderControl);
+  Hooks.on("renderActorSheetPF2e", addEtchRunesItemControl);
   Hooks.on("renderSceneControls", addGmControlsButton);
   Hooks.on("renderSceneNavigation", addGmChatControlButton);
 }

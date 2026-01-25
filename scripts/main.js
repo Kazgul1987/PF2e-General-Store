@@ -265,6 +265,16 @@ function getSpellConsumablePrice({ type, rank } = {}) {
   return priceTable.get(normalizedRank) ?? 0;
 }
 
+function isRuneItem(item) {
+  if (!item?.isOfType?.("equipment")) {
+    return false;
+  }
+  if (item.system?.category !== "rune") {
+    return false;
+  }
+  return true;
+}
+
 function formatGold(value) {
   return Number.isFinite(value) ? value.toLocaleString() : "0";
 }
@@ -2485,6 +2495,13 @@ function addEtchRunesItemControl(sheet, html) {
   }
 
   html.find('li[data-item-id] .item-controls:not(.readonly)').each((_index, element) => {
+    const listItem = $(element).closest("li[data-item-id]");
+    const itemId = listItem.data("itemId");
+    const item = sheet.actor?.items?.get(itemId);
+    if (!isRuneItem(item)) {
+      return;
+    }
+
     const controls = $(element);
     if (controls.find('[data-action="etch-runes"]').length) {
       return;
@@ -2502,7 +2519,7 @@ function addEtchRunesItemControl(sheet, html) {
   html.on("click", 'a[data-action="etch-runes"]', async (event) => {
     const itemId = $(event.currentTarget).closest("li[data-item-id]").data("itemId");
     const item = sheet.actor?.items?.get(itemId);
-    if (!item?.isOfType("physical")) {
+    if (!isRuneItem(item)) {
       return;
     }
 

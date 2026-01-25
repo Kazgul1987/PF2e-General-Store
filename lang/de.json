@@ -12,6 +12,7 @@
   "PF2EGeneralStore.EtchRunesInvalidData": "Rune oder Ziel-Item ist ungültig.",
   "PF2EGeneralStore.EtchRunesUnknownRuneType": "Unbekannter Runentyp.",
   "PF2EGeneralStore.EtchRunesIncompatible": "Rune ist mit dem ausgewählten Ziel nicht kompatibel.",
+  "PF2EGeneralStore.EtchRunesIncompatibleHint": "(nicht kompatibel)",
   "PF2EGeneralStore.EtchRunesNoFreeSlot": "Kein freier Runenplatz verfügbar.",
   "PF2EGeneralStore.EtchRunesMissingRuneData": "Runendaten fehlen oder sind unvollständig.",
   "PF2EGeneralStore.EtchRunesCancel": "Abbrechen"

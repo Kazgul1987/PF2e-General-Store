@@ -275,6 +275,22 @@ function isRuneItem(item) {
   return true;
 }
 
+function isRuneCompatibleWithItem(rune, item) {
+  if (!item?.isOfType?.("physical")) {
+    return false;
+  }
+  const runeTraits = rune?.system?.traits?.value ?? [];
+  const isWeaponRune = runeTraits.includes("weapon");
+  const isArmorRune = runeTraits.includes("armor");
+  if (isWeaponRune && !item.isOfType("weapon")) {
+    return false;
+  }
+  if (isArmorRune && !item.isOfType("armor", "shield")) {
+    return false;
+  }
+  return true;
+}
+
 function getPropertyRuneSlotCount(target) {
   if (target?.system?.grade) {
     return 0;
@@ -334,14 +350,7 @@ async function applyRuneToItem(rune, target) {
   const isWeaponTarget = target.isOfType?.("weapon");
   const isArmorTarget = target.isOfType?.("armor", "shield");
 
-  if (isWeaponRune && !isWeaponTarget) {
-    ui.notifications.warn(
-      i18n.localize("PF2EGeneralStore.EtchRunesIncompatible")
-    );
-    return false;
-  }
-
-  if (isArmorRune && !isArmorTarget) {
+  if (!isRuneCompatibleWithItem(rune, target)) {
     ui.notifications.warn(
       i18n.localize("PF2EGeneralStore.EtchRunesIncompatible")
     );
@@ -452,33 +461,33 @@ function openEtchRunesDialog({ actor, rune } = {}) {
     return;
   }
 
-  const isWeaponRune = rune.system?.traits?.value?.includes("weapon");
-  const isArmorRune = rune.system?.traits?.value?.includes("armor");
-  const compatibleItems = actor.items.filter((item) => {
-    if (!item.isOfType?.("physical")) {
-      return false;
-    }
-    if (isWeaponRune && !item.isOfType("weapon")) {
-      return false;
-    }
-    if (isArmorRune && !item.isOfType("armor", "shield")) {
-      return false;
-    }
-    return true;
-  });
-
-  const hasCompatibleItems = compatibleItems.length > 0;
-  const optionsMarkup = compatibleItems
+  const physicalItems = actor.items.filter((item) => item.isOfType?.("physical"));
+  const compatibleItems = physicalItems.filter((item) =>
+    isRuneCompatibleWithItem(rune, item)
+  );
+  const hasPhysicalItems = physicalItems.length > 0;
+  const firstCompatibleId = compatibleItems[0]?.id;
+  const optionsMarkup = physicalItems
     .map(
-      (item, index) => `
+      (item) => {
+        const isCompatible = isRuneCompatibleWithItem(rune, item);
+        return `
         <label class="pf2e-general-store-etch-option">
           <input type="radio" name="etch-target" value="${item.id}" ${
-            index === 0 ? "checked" : ""
-          } />
+            item.id === firstCompatibleId ? "checked" : ""
+          } ${isCompatible ? "" : "disabled"} />
           <img src="${item.img}" alt="${item.name}" width="24" height="24" />
           <span>${item.name}</span>
+          ${
+            isCompatible
+              ? ""
+              : `<span class="pf2e-general-store-etch-incompatible">${i18n.localize(
+                  "PF2EGeneralStore.EtchRunesIncompatibleHint"
+                )}</span>`
+          }
         </label>
-      `
+      `;
+      }
     )
     .join("");
 
@@ -486,7 +495,7 @@ function openEtchRunesDialog({ actor, rune } = {}) {
     <div class="pf2e-general-store-etch-dialog">
       <p>${rune.name}</p>
       ${
-        hasCompatibleItems
+        hasPhysicalItems
           ? `<div class="pf2e-general-store-etch-options">${optionsMarkup}</div>`
           : `<p>${i18n.localize("PF2EGeneralStore.EtchRunesNoTargets")}</p>`
       }
@@ -513,6 +522,12 @@ function openEtchRunesDialog({ actor, rune } = {}) {
           if (!targetItem) {
             ui.notifications.warn(
               i18n.localize("PF2EGeneralStore.EtchRunesTargetNotFound")
+            );
+            return false;
+          }
+          if (!isRuneCompatibleWithItem(rune, targetItem)) {
+            ui.notifications.warn(
+              i18n.localize("PF2EGeneralStore.EtchRunesIncompatible")
             );
             return false;
           }

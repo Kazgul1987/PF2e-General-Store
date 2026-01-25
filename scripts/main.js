@@ -275,6 +275,86 @@ function isRuneItem(item) {
   return true;
 }
 
+function openEtchRunesDialog({ actor, rune } = {}) {
+  if (!actor || !rune) {
+    ui.notifications.warn("Kein gültiger Akteur oder keine Rune ausgewählt.");
+    return;
+  }
+
+  const isWeaponRune = rune.system?.traits?.value?.includes("weapon");
+  const isArmorRune = rune.system?.traits?.value?.includes("armor");
+  const compatibleItems = actor.items.filter((item) => {
+    if (!item.isOfType?.("physical")) {
+      return false;
+    }
+    if (isWeaponRune && !item.isOfType("weapon")) {
+      return false;
+    }
+    if (isArmorRune && !item.isOfType("armor", "shield")) {
+      return false;
+    }
+    return true;
+  });
+
+  const hasCompatibleItems = compatibleItems.length > 0;
+  const optionsMarkup = compatibleItems
+    .map(
+      (item, index) => `
+        <label class="pf2e-general-store-etch-option">
+          <input type="radio" name="etch-target" value="${item.id}" ${
+            index === 0 ? "checked" : ""
+          } />
+          <img src="${item.img}" alt="${item.name}" width="24" height="24" />
+          <span>${item.name}</span>
+        </label>
+      `
+    )
+    .join("");
+
+  const content = `
+    <div class="pf2e-general-store-etch-dialog">
+      <p>${rune.name}</p>
+      ${
+        hasCompatibleItems
+          ? `<div class="pf2e-general-store-etch-options">${optionsMarkup}</div>`
+          : "<p>Keine kompatiblen Items gefunden.</p>"
+      }
+    </div>
+  `;
+
+  new Dialog({
+    title: "Runen einätzen",
+    content,
+    buttons: {
+      confirm: {
+        label: "Auswählen",
+        callback: (html) => {
+          const selectedId = html
+            .find('input[name="etch-target"]:checked')
+            .val();
+          if (!selectedId) {
+            ui.notifications.warn("Bitte wähle ein kompatibles Ziel-Item aus.");
+            return false;
+          }
+          const targetItem = actor.items.get(selectedId);
+          if (!targetItem) {
+            ui.notifications.warn("Ziel-Item nicht gefunden.");
+            return false;
+          }
+          ui.notifications.info(
+            `Platzhalter: Rune ${rune.name} soll auf ${targetItem.name} geätzt werden.`
+          );
+          return true;
+        },
+      },
+      cancel: {
+        label: "Abbrechen",
+      },
+    },
+    default: "confirm",
+  }).render(true);
+}
+
 function formatGold(value) {
   return Number.isFinite(value) ? value.toLocaleString() : "0";
 }
@@ -2523,7 +2603,7 @@ function addEtchRunesItemControl(sheet, html) {
       return;
     }
 
-    ui.notifications.info(game.i18n.localize("PF2EGeneralStore.EtchRunes"));
+    openEtchRunesDialog({ actor: sheet.actor, rune: item });
   });
 }
 

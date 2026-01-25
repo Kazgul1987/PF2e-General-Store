@@ -1,4 +1,12 @@
 {
   "PF2EGeneralStore.ModuleName": "PF2e General Store",
-  "PF2EGeneralStore.EtchRunes": "Runen ätzen"
+  "PF2EGeneralStore.EtchRunes": "Runen ätzen",
+  "PF2EGeneralStore.EtchRunesDialogTitle": "Runen einätzen",
+  "PF2EGeneralStore.EtchRunesNoTargets": "Keine kompatiblen Items gefunden.",
+  "PF2EGeneralStore.EtchRunesMissingActorOrRune": "Kein gültiger Akteur oder keine Rune ausgewählt.",
+  "PF2EGeneralStore.EtchRunesConfirm": "Auswählen",
+  "PF2EGeneralStore.EtchRunesSelectTarget": "Bitte wähle ein kompatibles Ziel-Item aus.",
+  "PF2EGeneralStore.EtchRunesTargetNotFound": "Ziel-Item nicht gefunden.",
+  "PF2EGeneralStore.EtchRunesPlaceholder": "Platzhalter: Rune {rune} soll auf {target} geätzt werden.",
+  "PF2EGeneralStore.EtchRunesCancel": "Abbrechen"
 }

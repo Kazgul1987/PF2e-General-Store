@@ -276,8 +276,11 @@ function isRuneItem(item) {
 }
 
 function openEtchRunesDialog({ actor, rune } = {}) {
+  const i18n = game.i18n;
   if (!actor || !rune) {
-    ui.notifications.warn("Kein gültiger Akteur oder keine Rune ausgewählt.");
+    ui.notifications.warn(
+      i18n.localize("PF2EGeneralStore.EtchRunesMissingActorOrRune")
+    );
     return;
   }
 
@@ -317,38 +320,45 @@ function openEtchRunesDialog({ actor, rune } = {}) {
       ${
         hasCompatibleItems
           ? `<div class="pf2e-general-store-etch-options">${optionsMarkup}</div>`
-          : "<p>Keine kompatiblen Items gefunden.</p>"
+          : `<p>${i18n.localize("PF2EGeneralStore.EtchRunesNoTargets")}</p>`
       }
     </div>
   `;
 
   new Dialog({
-    title: "Runen einätzen",
+    title: i18n.localize("PF2EGeneralStore.EtchRunesDialogTitle"),
     content,
     buttons: {
       confirm: {
-        label: "Auswählen",
+        label: i18n.localize("PF2EGeneralStore.EtchRunesConfirm"),
         callback: (html) => {
           const selectedId = html
             .find('input[name="etch-target"]:checked')
             .val();
           if (!selectedId) {
-            ui.notifications.warn("Bitte wähle ein kompatibles Ziel-Item aus.");
+            ui.notifications.warn(
+              i18n.localize("PF2EGeneralStore.EtchRunesSelectTarget")
+            );
             return false;
           }
           const targetItem = actor.items.get(selectedId);
           if (!targetItem) {
-            ui.notifications.warn("Ziel-Item nicht gefunden.");
+            ui.notifications.warn(
+              i18n.localize("PF2EGeneralStore.EtchRunesTargetNotFound")
+            );
             return false;
           }
           ui.notifications.info(
-            `Platzhalter: Rune ${rune.name} soll auf ${targetItem.name} geätzt werden.`
+            i18n.format("PF2EGeneralStore.EtchRunesPlaceholder", {
+              rune: rune.name,
+              target: targetItem.name,
+            })
           );
           return true;
         },
       },
       cancel: {
-        label: "Abbrechen",
+        label: i18n.localize("PF2EGeneralStore.EtchRunesCancel"),
       },
     },
     default: "confirm",

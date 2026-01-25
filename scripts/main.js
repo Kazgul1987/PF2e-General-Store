@@ -275,59 +275,42 @@ function isRuneItem(item) {
   return true;
 }
 
-function getPropertyRuneKeys(target) {
-  const candidateKeys = Object.keys(target?.system ?? {}).filter((key) =>
-    key.startsWith("propertyRune")
-  );
-  if (candidateKeys.length > 0) {
-    return candidateKeys.sort((a, b) => {
-      const aIndex = Number(a.replace("propertyRune", ""));
-      const bIndex = Number(b.replace("propertyRune", ""));
-      return aIndex - bIndex;
-    });
+function getPropertyRuneSlotCount(target) {
+  if (target?.system?.grade) {
+    return 0;
   }
-  return ["propertyRune1", "propertyRune2", "propertyRune3", "propertyRune4"];
-}
-
-function isRuneSlotEmpty(slotValue) {
-  if (slotValue === null || slotValue === undefined) {
-    return true;
-  }
-  if (typeof slotValue === "string") {
-    return slotValue.trim().length === 0;
-  }
-  if (typeof slotValue === "object") {
-    if ("value" in slotValue) {
-      const value = slotValue.value;
-      if (value === null || value === undefined) {
-        return true;
-      }
-      if (typeof value === "string") {
-        return value.trim().length === 0;
-      }
-    }
-    return Object.keys(slotValue).length === 0;
-  }
-  return false;
-}
-
-function normalizeRuneValue(value) {
-  if (value && typeof value === "object") {
-    return foundry.utils.deepClone(value);
-  }
-  if (value === null || value === undefined) {
-    return null;
-  }
-  return { value };
+  const materialType = target?.system?.material?.type;
+  const fromMaterial = materialType === "orichalcum" ? 1 : 0;
+  const potency = Number(target?.system?.runes?.potency ?? 0);
+  const fromPotency = Number.isFinite(potency) ? potency : 0;
+  return Math.min(4, Math.max(0, fromMaterial + fromPotency));
 }
 
 function getRuneValue(rune, fields) {
   for (const field of fields) {
     if (rune?.system?.[field] !== undefined) {
-      return normalizeRuneValue(rune.system[field]);
+      const candidate = rune.system[field];
+      if (typeof candidate === "number") {
+        return candidate;
+      }
+      if (
+        candidate &&
+        typeof candidate === "object" &&
+        typeof candidate.value === "number"
+      ) {
+        return candidate.value;
+      }
+      const numericValue = Number(candidate);
+      if (Number.isFinite(numericValue)) {
+        return numericValue;
+      }
     }
   }
   return null;
+}
+
+function getRuneSlug(rune) {
+  return rune?.slug ?? rune?.system?.slug ?? rune?.name?.slugify?.();
 }
 
 async function applyRuneToItem(rune, target) {
@@ -365,13 +348,13 @@ async function applyRuneToItem(rune, target) {
     return false;
   }
 
+  // PF2E system 7.9.1 updates item runes via system.runes.* fields and
+  // system.runes.property (array of rune slugs). Mirror that payload for compatibility.
   const updateData = {};
   switch (runeType) {
     case "potency": {
       const potencyValue = getRuneValue(rune, [
-        "potencyRune",
         "potency",
-        "value",
       ]);
       if (!potencyValue) {
         ui.notifications.warn(
@@ -379,7 +362,7 @@ async function applyRuneToItem(rune, target) {
         );
         return false;
       }
-      updateData["system.potencyRune"] = potencyValue;
+      updateData["system.runes.potency"] = potencyValue;
       break;
     }
     case "striking": {
@@ -390,9 +373,7 @@ async function applyRuneToItem(rune, target) {
         return false;
       }
       const strikingValue = getRuneValue(rune, [
-        "strikingRune",
         "striking",
-        "value",
       ]);
       if (!strikingValue) {
         ui.notifications.warn(
@@ -400,7 +381,7 @@ async function applyRuneToItem(rune, target) {
         );
         return false;
       }
-      updateData["system.strikingRune"] = strikingValue;
+      updateData["system.runes.striking"] = strikingValue;
       break;
     }
     case "resilient": {
@@ -411,9 +392,7 @@ async function applyRuneToItem(rune, target) {
         return false;
       }
       const resilientValue = getRuneValue(rune, [
-        "resilientRune",
         "resilient",
-        "value",
       ]);
       if (!resilientValue) {
         ui.notifications.warn(
@@ -421,33 +400,29 @@ async function applyRuneToItem(rune, target) {
         );
         return false;
       }
-      updateData["system.resilientRune"] = resilientValue;
+      updateData["system.runes.resilient"] = resilientValue;
       break;
     }
     case "property": {
-      const propertyValue = getRuneValue(rune, [
-        "propertyRune",
-        "property",
-        "value",
-        "slug",
-      ]);
-      if (!propertyValue) {
+      const propertySlug = getRuneSlug(rune);
+      if (!propertySlug) {
         ui.notifications.warn(
           i18n.localize("PF2EGeneralStore.EtchRunesMissingRuneData")
         );
         return false;
       }
-      const propertyKeys = getPropertyRuneKeys(target);
-      const freeKey = propertyKeys.find((key) =>
-        isRuneSlotEmpty(target.system?.[key])
-      );
-      if (!freeKey) {
+      const propertyRunes = Array.isArray(target.system?.runes?.property)
+        ? [...target.system.runes.property]
+        : [];
+      const slotCount = getPropertyRuneSlotCount(target);
+      if (propertyRunes.length >= slotCount) {
         ui.notifications.warn(
           i18n.localize("PF2EGeneralStore.EtchRunesNoFreeSlot")
         );
         return false;
       }
-      updateData[`system.${freeKey}`] = propertyValue;
+      propertyRunes.push(propertySlug);
+      updateData["system.runes.property"] = propertyRunes;
       break;
     }
     default: {

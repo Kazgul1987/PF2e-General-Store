@@ -1949,11 +1949,22 @@ async function openShopDialog(actor) {
   const partyActor = getPartyStashActor();
   const { currency: partyCurrency } = getActorCurrency(partyActor);
   const partyGold = partyActor ? formatCurrencyInGold(partyCurrency) : null;
+  const systemLogo =
+    game.system?.logo ??
+    game.system?.data?.logo ??
+    game.system?.data?.media?.logo ??
+    game.system?.data?.media?.icon ??
+    null;
+  const logoAlt = game.system?.title
+    ? `${game.system.title} Logo`
+    : "System-Logo";
   const content = await renderTemplate(SHOP_DIALOG_TEMPLATE, {
     actorName,
     actorTokenSrc,
     actorGold,
     partyGold,
+    logoSrc: systemLogo,
+    logoAlt,
   });
 
   const dialog = new Dialog(

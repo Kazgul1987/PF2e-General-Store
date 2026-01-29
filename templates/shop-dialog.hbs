@@ -1,6 +1,15 @@
 <section class="pf2e-general-store-dialog">
   <header class="store-controls">
-    <h1 class="store-title">Willkommen bei Abadar Prime. First Vault Qualität direkt für Euren Rucksack.</h1>
+    <div class="store-controls__header">
+      <div class="store-logo">
+        {{#if logoSrc}}
+          <img class="store-logo__image" src="{{logoSrc}}" alt="{{logoAlt}}" />
+        {{else}}
+          <span class="store-logo__placeholder">Logo</span>
+        {{/if}}
+      </div>
+      <h1 class="store-title">Willkommen bei Abadar Prime. First Vault Qualität direkt für Euren Rucksack.</h1>
+    </div>
     <div class="store-controls__row">
       <div class="store-filters">
         <label class="store-option">

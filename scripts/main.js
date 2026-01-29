@@ -1328,13 +1328,6 @@ function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) 
       title: "Kauf bestätigen",
       content,
       buttons: {
-        manageStores: {
-          label: "Settlements/NPCs",
-          callback: () => {
-            void openStoreManager();
-            return true;
-          },
-        },
         buy: {
           label: "Kaufen",
           callback: (html) => {
@@ -3075,6 +3068,13 @@ function openGmMenu() {
       title: "General Store (GM)",
       content: htmlContent,
       buttons: {
+        manageStores: {
+  label: "Settlements/NPCs",
+  callback: () => {
+    void openStoreManager();
+    return true;
+  },
+},
         save: {
           label: "Filter speichern",
           callback: (html) => {

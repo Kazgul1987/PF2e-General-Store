@@ -165,7 +165,7 @@
   padding: 0.35rem 0;
 }
 
-.pf2e-general-store-dialog .store-result  .store-result {
+.pf2e-general-store-dialog .store-result + .store-result {
   border-top: 1px solid rgba(0, 0, 0, 0.08);
 }
 
@@ -518,66 +518,94 @@
   color: rgba(0, 0, 0, 0.6);
   font-size: 0.85rem;
 }
+
+
 .store-context {
-   margin-top: 0.35rem;
-   font-size: 0.9rem;
-   opacity: 0.9;
- }
- 
- .store-manager__header {
-   display: flex;
-   align-items: flex-start;
-   justify-content: space-between;
-   gap: 0.75rem;
-   margin-bottom: 0.75rem;
- }
- 
- .store-manager__hint {
-   margin: 0.35rem 0 0;
-   font-size: 0.85rem;
-   opacity: 0.85;
- }
- 
- .store-manager__toolbar button {
-   display: inline-flex;
-   align-items: center;
-   gap: 0.35rem;
- }
- 
- .store-manager__table-wrap {
-   overflow: auto;
-   max-height: 520px;
- }
- 
- .store-manager__table {
-   width: 100%;
-   border-collapse: collapse;
- }
- 
- .store-manager__table th,
- .store-manager__table td {
-   padding: 0.35rem;
-   vertical-align: middle;
- }
- 
- .store-manager__table thead th {
-   position: sticky;
-   top: 0;
-   background: var(--color-bg);
-   z-index: 1;
- }
- 
- .store-manager__num input {
-   width: 4.5rem;
- }
- 
- .store-manager__actions {
-   width: 2.5rem;
-   text-align: center;
- }
- 
- .store-manager__delete {
-   background: transparent;
-   border: 0;
-   padding: 0.25rem;
- }
+  margin-top: 0.35rem;
+  font-size: 0.9rem;
+  opacity: 0.9;
+}
+
+.store-manager__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.store-manager__hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.store-manager__toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.store-manager__table-wrap {
+  overflow: auto;
+  max-height: 520px;
+}
+
+.store-manager__table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.store-manager__table th,
+.store-manager__table td {
+  padding: 0.35rem;
+  vertical-align: middle;
+}
+
+.store-manager__table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--color-bg);
+  z-index: 1;
+}
+
+.store-manager__num input {
+  width: 4.5rem;
+}
+
+.store-manager__actions {
+  width: 2.5rem;
+  text-align: center;
+}
+
+.store-manager__delete {
+  background: transparent;
+  border: 0;
+  padding: 0.25rem;
+}
+
+.pf2e-general-store-sell-dialog .sell-dialog__items {
+  max-height: 420px;
+  overflow: auto;
+  margin-top: 0.5rem;
+  border: 1px solid rgba(0,0,0,0.15);
+  border-radius: 4px;
+  padding: 0.25rem;
+}
+
+.pf2e-general-store-sell-dialog .sell-dialog__item {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.25rem 0.35rem;
+}
+
+.pf2e-general-store-sell-dialog .sell-dialog__item + .sell-dialog__item {
+  border-top: 1px solid rgba(0,0,0,0.1);
+}
+
+.pf2e-general-store-sell-dialog .sell-dialog__meta {
+  font-size: 0.85rem;
+  opacity: 0.85;
+}

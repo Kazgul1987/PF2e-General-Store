@@ -1,0 +1,80 @@
+<section class="pf2e-general-store-dialog store-manager">
+  <form>
+    <header class="store-manager__header">
+      <div class="store-manager__active">
+        <label>
+          <strong>Aktiver Shop{{#if hasScene}} (diese Szene){{else}} (Fallback){{/if}}:</strong>
+          <select name="active-store">
+            <option value="" {{#unless activeId}}selected="selected"{{/unless}}>— Kein Shop —</option>
+            {{#each stores as |store|}}
+              <option value="{{store.id}}" {{#if store.isActive}}selected="selected"{{/if}}>{{store.name}}</option>
+            {{/each}}
+          </select>
+        </label>
+        <p class="store-manager__hint">
+          Spieler sehen diesen Namen im Einkaufsmenü. Die Filter unten bestimmen das Sortiment (Item-Level, Rarity, Traits).
+        </p>
+      </div>
+
+      <div class="store-manager__toolbar">
+        <button type="button" class="store-manager__add">
+          <i class="fas fa-plus" aria-hidden="true"></i> Neuer Shop
+        </button>
+      </div>
+    </header>
+
+    <div class="store-manager__table-wrap">
+      <table class="store-manager__table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Typ</th>
+            <th>Min</th>
+            <th>Max</th>
+            <th>Rarity</th>
+            <th>Traits</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody class="store-manager__tbody">
+          {{#each stores as |store|}}
+            <tr class="store-manager__row" data-store-id="{{store.id}}">
+              <td>
+                <input type="text" class="store-manager__name" value="{{store.name}}" placeholder="z.B. Otari – Krämerladen" />
+              </td>
+              <td>
+                <select class="store-manager__kind">
+                  <option value="settlement" {{#unless store.isNpc}}selected="selected"{{/unless}}>Settlement</option>
+                  <option value="npc" {{#if store.isNpc}}selected="selected"{{/if}}>NPC</option>
+                </select>
+              </td>
+              <td class="store-manager__num">
+                <input type="number" class="store-manager__min" value="{{store.minLevel}}" min="0" />
+              </td>
+              <td class="store-manager__num">
+                <input type="number" class="store-manager__max" value="{{store.maxLevel}}" min="0" />
+              </td>
+              <td>
+                <select class="store-manager__rarity">
+                  <option value="" {{#unless store.rarity}}selected="selected"{{/unless}}>Alle</option>
+                  <option value="common" {{#if store.isCommon}}selected="selected"{{/if}}>Common</option>
+                  <option value="uncommon" {{#if store.isUncommon}}selected="selected"{{/if}}>Uncommon</option>
+                  <option value="rare" {{#if store.isRare}}selected="selected"{{/if}}>Rare</option>
+                  <option value="unique" {{#if store.isUnique}}selected="selected"{{/if}}>Unique</option>
+                </select>
+              </td>
+              <td>
+                <input type="text" class="store-manager__traits" value="{{store.traitsInput}}" placeholder="traits, kommagetrennt" />
+              </td>
+              <td class="store-manager__actions">
+                <button type="button" class="store-manager__delete" title="Shop löschen">
+                  <i class="fas fa-trash" aria-hidden="true"></i>
+                </button>
+              </td>
+            </tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </div>
+  </form>
+</section>

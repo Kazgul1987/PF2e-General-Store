@@ -10,6 +10,8 @@ const WISHLIST_CLIENT_SETTING = "wishlistStateClient";
 const STORE_DEFINITIONS_SETTING = "storeDefinitions";
 const ACTIVE_STORE_SETTING = "activeStoreId";
 const ACTIVE_STORE_SCENE_FLAG = "activeStoreId";
+const SELL_LOOT_FLAG_SCOPE = "world";
+const SELL_LOOT_FLAG_KEY = "sellLootActorId";
 const PACK_INDEX_CACHE = new Map();
 const SPELL_PACK_INDEX_CACHE = new Map();
 const ITEM_INDEX_CACHE = new Map();
@@ -771,10 +773,7 @@ async function setStoreDefinitions(definitions) {
 
 function getActiveStoreId() {
   const sceneValue = canvas?.scene?.getFlag?.(MODULE_ID, ACTIVE_STORE_SCENE_FLAG) ?? null;
-  if (typeof sceneValue === "string" && sceneValue.length) {
-    return sceneValue;
-  }
-
+  if (typeof sceneValue === "string" && sceneValue.length) return sceneValue;
   const fallback = game.settings?.get(MODULE_ID, ACTIVE_STORE_SETTING) ?? "";
   return typeof fallback === "string" && fallback.length ? fallback : null;
 }
@@ -786,7 +785,6 @@ async function setActiveStoreId(storeId) {
   } else {
     await game.settings.set(MODULE_ID, ACTIVE_STORE_SETTING, value);
   }
-
   game.socket?.emit(`module.${MODULE_ID}`, { type: "activeStoreUpdate", storeId: value });
   refreshOpenStoreDialogs();
 }
@@ -794,42 +792,29 @@ async function setActiveStoreId(storeId) {
 function getActiveStore() {
   const definitions = getStoreDefinitions();
   const id = getActiveStoreId();
-  if (!id) {
-    return null;
-  }
-
+  if (!id) return null;
   const store = definitions?.[id] ?? null;
   return store && typeof store === "object" ? store : null;
 }
 
 function formatActiveStoreLabel(store) {
-  if (!store) {
-    return "Kein Shop gewählt";
-  }
-
+  if (!store) return "Kein Shop gewählt";
   const name = store.name ?? "Unbenannter Shop";
-  const kind =
-    store.kind === "npc" ? "NPC" : store.kind === "settlement" ? "Settlement" : null;
+  const kind = store.kind === "npc" ? "NPC" : store.kind === "settlement" ? "Settlement" : null;
   return kind ? `${name} (${kind})` : name;
 }
 
 function getEffectiveShopFilters() {
   const store = getActiveStore();
-  if (store?.filters) {
-    return normalizeGmFilters(store.filters);
-  }
+  if (store?.filters) return normalizeGmFilters(store.filters);
   return getCurrentGmFilters();
 }
 
 function generateStoreId() {
   try {
     const rid = foundry?.utils?.randomID?.(16);
-    if (typeof rid === "string" && rid.length) {
-      return rid;
-    }
-  } catch (_err) {
-    // ignore
-  }
+    if (typeof rid === "string" && rid.length) return rid;
+  } catch (_err) {}
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 }
 
@@ -1009,26 +994,19 @@ function refreshOpenStoreDialogs() {
   if (!activeDialogs.length) {
     return;
   }
-
   const filters = getEffectiveShopFilters();
   const storeLabel = formatActiveStoreLabel(getActiveStore());
-
   activeDialogs.forEach((dialog) => {
     const searchInput = dialog.querySelector('input[name="store-search"]');
     const resultsList = dialog.querySelector(".store-results ul");
     if (!searchInput || !resultsList) {
       return;
     }
-
     const labelTarget = dialog.querySelector("[data-active-store-label]");
-    if (labelTarget) {
-      labelTarget.textContent = storeLabel;
-    }
-
+    if (labelTarget) labelTarget.textContent = storeLabel;
     void updateSearchResults(searchInput.value ?? "", $(resultsList), filters);
   });
 }
-
 
 function renderSearchLoading(listElement) {
   listElement.empty();
@@ -1350,6 +1328,13 @@ function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) 
       title: "Kauf bestätigen",
       content,
       buttons: {
+        manageStores: {
+          label: "Settlements/NPCs",
+          callback: () => {
+            void openStoreManager();
+            return true;
+          },
+        },
         buy: {
           label: "Kaufen",
           callback: (html) => {
@@ -2058,14 +2043,13 @@ async function openShopDialog(actor) {
     ? `${game.system.title} Logo`
     : "System-Logo";
   const activeStoreLabel = formatActiveStoreLabel(getActiveStore());
-  const content = await renderTemplate(SHOP_DIALOG_TEMPLATE, {
+  const content = await renderTemplate(SHOP_DIALOG_TEMPLATE, { activeStoreLabel,
     actorName,
     actorTokenSrc,
     actorGold,
     partyGold,
     logoSrc: systemLogo,
     logoAlt,
-    activeStoreLabel,
   });
 
   const dialog = new Dialog(
@@ -2453,8 +2437,10 @@ async function openShopDialog(actor) {
     void getCachedItemIndexEntries();
     void getCachedSpellIndexEntries();
     const debouncedSearch = debounce((value) => {
+      {
       const filters = getEffectiveShopFilters();
       void updateSearchResults(value, resultsList, filters);
+    }
     });
 
     searchInput.on("input", (event) => {
@@ -2465,8 +2451,10 @@ async function openShopDialog(actor) {
       "change",
       'input[name="filter-spell"], input[name="filter-item"]',
       () => {
-        const filters = getEffectiveShopFilters();
-        void updateSearchResults(searchInput.val() ?? "", resultsList, filters);
+        {
+      const filters = getEffectiveShopFilters();
+      void updateSearchResults(searchInput.val() ?? "", resultsList, filters);
+    }
       }
     );
 
@@ -2484,6 +2472,9 @@ async function openShopDialog(actor) {
     html.on("click", ".store-wishlist__view", () => {
       void openWishlistDialog();
     });
+    html.on("click", ".store-sell__open", () => {
+      void openSellDialog(actor);
+    });
 
     updateCartSummary();
     {
@@ -2493,11 +2484,393 @@ async function openShopDialog(actor) {
   });
 }
 
+async function pickLootActor(actors) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const finish = (actor) => {
+      if (resolved) return;
+      resolved = true;
+      resolve(actor ?? null);
+    };
 
-async function openStoreManager() {
-  if (!game.user?.isGM) {
+    const options = actors
+      .map((actor) => `<option value="${actor.id}">${escapeHtmlSafe(actor.name)}</option>`)
+      .join("");
+
+    new Dialog({
+      title: "Loot-Actor wählen",
+      content: `
+        <form>
+          <div class="form-group">
+            <label>Bitte Actor auswählen:</label>
+            <select name="actor" autofocus>${options}</select>
+          </div>
+        </form>
+      `,
+      buttons: {
+        confirm: {
+          label: "Auswählen",
+          callback: (html) => {
+            const id = html.find("[name=actor]").val();
+            finish(actors.find((actor) => actor.id === id) ?? null);
+          },
+        },
+        cancel: {
+          label: "Abbrechen",
+          callback: () => finish(null),
+        },
+      },
+      default: "confirm",
+      close: () => finish(null),
+    }).render(true);
+  });
+}
+
+async function resolveSellLootActor() {
+  const lootActors = game.actors?.contents?.filter((actor) => actor.isOfType?.("loot")) ?? [];
+  if (!lootActors.length) {
+    ui.notifications.warn("Kein Loot-Actor im Spiel gefunden.");
+    return null;
+  }
+
+  const controlledLoot =
+    canvas?.tokens?.controlled
+      ?.map((token) => token.actor)
+      .find((actor) => actor?.isOfType?.("loot")) ?? null;
+
+  let lootActor = controlledLoot;
+  if (!lootActor) {
+    const savedId = game.user.getFlag(SELL_LOOT_FLAG_SCOPE, SELL_LOOT_FLAG_KEY);
+    lootActor = lootActors.find((actor) => actor.id === savedId) ?? null;
+  }
+
+  if (!lootActor) {
+    lootActor = lootActors.length === 1 ? lootActors[0] : await pickLootActor(lootActors);
+  }
+
+  if (!lootActor) return null;
+
+  await game.user.setFlag(SELL_LOOT_FLAG_SCOPE, SELL_LOOT_FLAG_KEY, lootActor.id);
+  return lootActor;
+}
+
+function getSellValueForItem(item) {
+  const value = item?.assetValue ?? null;
+  if (!value) return null;
+  if (item.isOfType?.("treasure")) return value;
+  return value.scale?.(0.5) ?? value;
+}
+
+function getItemQuantitySafe(item) {
+  const q = item?.quantity ?? item?.system?.quantity ?? 1;
+  const num = Number(q);
+  return Number.isFinite(num) && num > 0 ? num : 1;
+}
+
+async function openSellDialog(shopActor) {
+  if (!shopActor) {
+    ui.notifications.warn("Kein Actor gewählt.");
     return;
   }
+  if (!shopActor.isOwner) {
+    ui.notifications.warn("Du hast keine Berechtigung, von diesem Actor zu verkaufen.");
+    return;
+  }
+
+  const partyActor = getPartyStashActor();
+  const canParty = Boolean(game.user?.isGM && partyActor?.isOwner);
+  const canSellActor = Boolean(game.user?.isGM);
+
+  const content = `
+    <form class="pf2e-general-store-sell-dialog">
+      <div class="form-group">
+        <label><strong>Quelle wählen:</strong></label>
+        <div class="form-fields" style="display:flex; flex-direction:column; gap:0.25rem;">
+          <label><input type="radio" name="sell-source" value="actor" checked /> Actor (${escapeHtmlSafe(shopActor.name)})</label>
+          ${canParty ? `<label><input type="radio" name="sell-source" value="party" /> Party Stash</label>` : ""}
+          ${canSellActor ? `<label><input type="radio" name="sell-source" value="sellactor" /> Sell Actor (alles verkaufen)</label>` : ""}
+        </div>
+      </div>
+      <p class="notes">Items werden zu <strong>50%</strong> des Listenpreises verkauft, <strong>Treasure</strong> zu <strong>100%</strong>.</p>
+    </form>
+  `;
+
+  new Dialog({
+    title: "Verkaufen",
+    content,
+    buttons: {
+      next: {
+        icon: '<i class="fas fa-arrow-right"></i>',
+        label: "Weiter",
+        callback: async (html) => {
+          const source = html.find('input[name="sell-source"]:checked').val();
+          if (source === "actor") {
+            await openSellSelectionDialog({
+              title: `Verkaufen: ${shopActor.name}`,
+              sourceActor: shopActor,
+              payoutActor: shopActor,
+              allowSelect: true,
+            });
+            return true;
+          }
+
+          if (source === "party") {
+            if (!canParty) {
+              ui.notifications.warn("Party Stash nicht verfügbar.");
+              return false;
+            }
+            await openSellSelectionDialog({
+              title: "Verkaufen: Party Stash",
+              sourceActor: partyActor,
+              payoutActor: partyActor,
+              allowSelect: true,
+            });
+            return true;
+          }
+
+          if (source === "sellactor") {
+            if (!canSellActor) {
+              ui.notifications.warn("Nur GM kann aus einem Sell Actor verkaufen.");
+              return false;
+            }
+            if (!partyActor) {
+              ui.notifications.warn("Kein Party Stash Actor gefunden.");
+              return false;
+            }
+            const lootActor = await resolveSellLootActor();
+            if (!lootActor) return false;
+            await sellAllFromLootActorToParty({ lootActor, partyActor });
+            return true;
+          }
+
+          return false;
+        },
+      },
+      cancel: { label: "Abbrechen" },
+    },
+    default: "next",
+  }).render(true);
+}
+
+async function openSellSelectionDialog({ title, sourceActor, payoutActor, allowSelect }) {
+  if (!sourceActor?.isOwner) {
+    ui.notifications.warn("Keine Berechtigung für diese Quelle.");
+    return;
+  }
+  if (!payoutActor?.isOwner) {
+    ui.notifications.warn("Keine Berechtigung für den Auszahlung-Actor.");
+    return;
+  }
+
+  const items = sourceActor.inventory?.contents ?? [];
+  if (!items.length) {
+    ui.notifications.info(`${sourceActor.name}: Keine Gegenstände zum Verkaufen.`);
+    return;
+  }
+
+  const rows = items
+    .map((item) => {
+      const qty = getItemQuantitySafe(item);
+      const saleValue = getSellValueForItem(item);
+      const saleText = saleValue ? saleValue.toString() : "—";
+      const meta = item.isOfType?.("treasure") ? "Treasure (100%)" : "Item (50%)";
+      return `
+        <div class="sell-dialog__item">
+          <input type="checkbox" name="sell-item" value="${item.id}" />
+          <div>
+            <div><strong>${escapeHtmlSafe(item.name)}</strong> <span class="sell-dialog__meta">x${qty} • ${meta}</span></div>
+          </div>
+          <div>${escapeHtmlSafe(saleText)}</div>
+        </div>
+      `;
+    })
+    .join("");
+
+  const content = `
+    <form class="pf2e-general-store-sell-dialog">
+      <p><strong>Quelle:</strong> ${escapeHtmlSafe(sourceActor.name)}<br/>
+         <strong>Auszahlung an:</strong> ${escapeHtmlSafe(payoutActor.name)}</p>
+      <div class="sell-dialog__items">
+        ${rows}
+      </div>
+    </form>
+  `;
+
+  const confirmed = await new Promise((resolve) => {
+    let resolved = false;
+    const finish = (value) => {
+      if (resolved) return;
+      resolved = true;
+      resolve(Boolean(value));
+    };
+
+    new Dialog({
+      title,
+      content,
+      buttons: {
+        sell: {
+          icon: '<i class="fas fa-coins"></i>',
+          label: "Verkaufen",
+          callback: async (html) => {
+            const checked = html
+              .find('input[name="sell-item"]:checked')
+              .toArray()
+              .map((el) => el.value);
+
+            if (!checked.length) {
+              ui.notifications.warn("Keine Items ausgewählt.");
+              finish(false);
+              return;
+            }
+
+            const selected = items.filter((it) => checked.includes(it.id));
+            const payout = computePayoutForItems(selected);
+            const ok = await confirmSaleDialog({
+              sourceName: sourceActor.name,
+              itemCount: selected.length,
+              payout,
+            });
+            if (!ok) {
+              finish(false);
+              return;
+            }
+
+            await sourceActor.deleteEmbeddedDocuments("Item", selected.map((i) => i.id));
+            if (payout?.copperValue > 0) {
+              await payoutActor.inventory.addCoins(payout);
+            }
+
+            await postSaleChatMessage({
+              sourceActor,
+              payoutActor,
+              payout,
+              itemCount: selected.length,
+            });
+
+            ui.notifications.info(`${sourceActor.name}: Verkaufserlös ${payout.toString()}.`);
+            finish(true);
+          },
+        },
+        cancel: {
+          icon: '<i class="fas fa-times"></i>',
+          label: "Abbrechen",
+          callback: () => finish(false),
+        },
+      },
+      default: "sell",
+      close: () => finish(false),
+    }).render(true);
+  });
+
+  return confirmed;
+}
+
+function computePayoutForItems(items) {
+  const { Coins } = game.pf2e;
+  let payout = new Coins();
+  for (const item of items) {
+    const value = getSellValueForItem(item);
+    if (value) payout = payout.plus(value);
+  }
+  return payout;
+}
+
+async function confirmSaleDialog({ sourceName, itemCount, payout }) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const finish = (v) => {
+      if (resolved) return;
+      resolved = true;
+      resolve(Boolean(v));
+    };
+
+    new Dialog({
+      title: "Verkauf bestätigen",
+      content: `<p>${escapeHtmlSafe(sourceName)}: ${itemCount} Gegenstände für <strong>${escapeHtmlSafe(payout.toString())}</strong> verkaufen?</p>`,
+      buttons: {
+        yes: {
+          icon: '<i class="fas fa-coins"></i>',
+          label: "Verkaufen",
+          callback: () => finish(true),
+        },
+        no: {
+          icon: '<i class="fas fa-times"></i>',
+          label: "Abbrechen",
+          callback: () => finish(false),
+        },
+      },
+      default: "yes",
+      close: () => finish(false),
+    }).render(true);
+  });
+}
+
+async function postSaleChatMessage({ sourceActor, payoutActor, payout, itemCount }) {
+  try {
+    const goldValue = payout.goldValue;
+    const goldText = Number.isInteger(goldValue) ? goldValue.toString() : goldValue.toFixed(2);
+    const speaker = ChatMessage.getSpeaker({ actor: payoutActor });
+    const targetLabel = payoutActor?.id === sourceActor?.id ? "an den Actor" : "in den Party Stash";
+    await ChatMessage.create({
+      speaker,
+      content: `Verkauf: ${itemCount} Gegenstände für ${goldText} Gold (${targetLabel}).`,
+    });
+  } catch (_err) {
+    // ignore
+  }
+}
+
+async function sellAllFromLootActorToParty({ lootActor, partyActor }) {
+  if (!lootActor?.isOwner) {
+    ui.notifications.warn("Keine Berechtigung für den Loot-Actor.");
+    return;
+  }
+  if (!partyActor?.isOwner) {
+    ui.notifications.warn("Keine Berechtigung für den Party Stash.");
+    return;
+  }
+
+  const items = lootActor.inventory?.contents ?? [];
+  if (!items.length) {
+    ui.notifications.info(`${lootActor.name}: Keine Gegenstände zum Verkaufen.`);
+    return;
+  }
+
+  const payout = computePayoutForItems(items);
+  const ok = await confirmSaleDialog({
+    sourceName: lootActor.name,
+    itemCount: items.length,
+    payout,
+  });
+  if (!ok) {
+    ui.notifications.info("Aktion abgebrochen – keine Gegenstände verkauft.");
+    return;
+  }
+
+  await lootActor.deleteEmbeddedDocuments("Item", items.map((i) => i.id));
+  if (payout?.copperValue > 0) {
+    await partyActor.inventory.addCoins(payout);
+  }
+
+  await postSaleChatMessage({
+    sourceActor: lootActor,
+    payoutActor: partyActor,
+    payout,
+    itemCount: items.length,
+  });
+
+  ui.notifications.info(`${lootActor.name}: Verkaufserlös ${payout.toString()} (an Party Stash).`);
+}
+
+function getDefaultShopActor() {
+  const controlledActor = canvas?.tokens?.controlled?.[0]?.actor ?? null;
+  return controlledActor ?? game.user?.character ?? null;
+}
+
+
+
+async function openStoreManager() {
+  if (!game.user?.isGM) return;
 
   const definitions = getStoreDefinitions();
   const activeId = getActiveStoreId() ?? "";
@@ -2530,28 +2903,18 @@ async function openStoreManager() {
       title: "General Store: Shops (Settlements/NPCs)",
       content,
       buttons: {
-        manageStores: {
-          label: "Settlements/NPCs",
-          callback: () => {
-            void openStoreManager();
-            return true;
-          },
-        },
         save: {
           label: "Speichern",
           callback: (html) => {
             const form = html[0]?.querySelector("form");
-            if (!form) {
-              return false;
-            }
+            if (!form) return false;
 
             const rows = Array.from(form.querySelectorAll(".store-manager__row"));
             const nextDefinitions = {};
+
             for (const row of rows) {
               const id = row.dataset.storeId;
-              if (!id) {
-                continue;
-              }
+              if (!id) continue;
 
               const name = row.querySelector(".store-manager__name")?.value?.trim() ?? "";
               if (!name) {
@@ -2559,8 +2922,7 @@ async function openStoreManager() {
                 return false;
               }
 
-              const kind =
-                row.querySelector(".store-manager__kind")?.value === "npc" ? "npc" : "settlement";
+              const kind = row.querySelector(".store-manager__kind")?.value === "npc" ? "npc" : "settlement";
               const traitsValue = row.querySelector(".store-manager__traits")?.value ?? "";
               const minValue = row.querySelector(".store-manager__min")?.value ?? "";
               const maxValue = row.querySelector(".store-manager__max")?.value ?? "";
@@ -2592,25 +2954,17 @@ async function openStoreManager() {
             return true;
           },
         },
-        close: {
-          label: "Schließen",
-        },
+        close: { label: "Schließen" },
       },
       default: "save",
     },
-    {
-      width: 820,
-      height: 650,
-      resizable: true,
-    }
+    { width: 820, height: 650, resizable: true }
   );
 
   dialog.render(true);
 
   Hooks.once("renderDialog", (app, html) => {
-    if (app !== dialog) {
-      return;
-    }
+    if (app !== dialog) return;
 
     const addRow = (store = null) => {
       const id = store?.id ?? generateStoreId();
@@ -2679,9 +3033,7 @@ async function openStoreManager() {
       }
     };
 
-    html.on("click", ".store-manager__add", () => {
-      addRow();
-    });
+    html.on("click", ".store-manager__add", () => addRow());
 
     html.on("click", ".store-manager__delete", (event) => {
       const row = $(event.currentTarget).closest(".store-manager__row");
@@ -2690,10 +3042,7 @@ async function openStoreManager() {
 
       const activeSelect = html.find('select[name="active-store"]');
       activeSelect.find(`option[value="${id}"]`).remove();
-
-      if (activeSelect.val() === id) {
-        activeSelect.val("");
-      }
+      if (activeSelect.val() === id) activeSelect.val("");
     });
 
     html.on("input", ".store-manager__name", (event) => {
@@ -2702,18 +3051,10 @@ async function openStoreManager() {
       const value = String(event.currentTarget.value ?? "").trim();
       const activeSelect = html.find('select[name="active-store"]');
       const opt = activeSelect.find(`option[value="${id}"]`);
-      if (opt.length) {
-        opt.text(value || "(Neuer Shop)");
-      }
+      if (opt.length) opt.text(value || "(Neuer Shop)");
     });
   });
 }
-
-function getDefaultShopActor() {
-  const controlledActor = canvas?.tokens?.controlled?.[0]?.actor ?? null;
-  return controlledActor ?? game.user?.character ?? null;
-}
-
 function openGmMenu() {
   const filters = getCurrentGmFilters();
   const content = renderTemplate(GM_FILTERS_TEMPLATE, {
@@ -2734,13 +3075,6 @@ function openGmMenu() {
       title: "General Store (GM)",
       content: htmlContent,
       buttons: {
-        manageStores: {
-          label: "Settlements/NPCs",
-          callback: () => {
-            void openStoreManager();
-            return true;
-          },
-        },
         save: {
           label: "Filter speichern",
           callback: (html) => {
@@ -2861,7 +3195,6 @@ function addGmControlsButton(app, html) {
   }
 }
 
-
 function addGmChatControlButton(app, html) {
   if (!game.user?.isGM) {
     return;
@@ -2930,7 +3263,6 @@ function invalidateCompendiumCaches() {
   spellIndexBuildPromise = null;
 }
 
-
 export function registerPF2eGeneralStore() {
   Hooks.on("renderActorSheet", addActorSheetHeaderControl);
   Hooks.on("renderActorSheetPF2e", addActorSheetHeaderControl);
@@ -2968,6 +3300,7 @@ Hooks.once("init", () => {
     type: Object,
     default: DEFAULT_WISHLIST_STATE,
   });
+
   game.settings.register(MODULE_ID, STORE_DEFINITIONS_SETTING, {
     name: "General Store: Shop-Definitionen (Settlements/NPCs)",
     scope: "world",
@@ -2975,6 +3308,7 @@ Hooks.once("init", () => {
     type: Object,
     default: {},
   });
+
   game.settings.register(MODULE_ID, ACTIVE_STORE_SETTING, {
     name: "General Store: Aktiver Shop (Fallback)",
     scope: "world",
@@ -2982,7 +3316,7 @@ Hooks.once("init", () => {
     type: String,
     default: "",
   });
-    invalidateCompendiumCaches();
+  invalidateCompendiumCaches();
   registerPF2eGeneralStore();
 });
 
@@ -2997,14 +3331,6 @@ Hooks.once("ready", () => {
   game.socket?.on(`module.${MODULE_ID}`, (payload) => {
     if (payload?.type === "gmFiltersUpdate") {
       currentGmFilters = normalizeGmFilters(payload.filters ?? {});
-      refreshOpenStoreDialogs();
-      return;
-    }
-    if (payload?.type === "storeDefinitionsUpdate") {
-      refreshOpenStoreDialogs();
-      return;
-    }
-    if (payload?.type === "activeStoreUpdate") {
       refreshOpenStoreDialogs();
       return;
     }

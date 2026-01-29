@@ -2,10 +2,14 @@ const MODULE_ID = "pf2e-general-store";
 const SHOP_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/shop-dialog.hbs`;
 const GM_FILTERS_TEMPLATE = `modules/${MODULE_ID}/templates/gm-filters.hbs`;
 const WISHLIST_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/wishlist-dialog.hbs`;
+const STORE_MANAGER_TEMPLATE = `modules/${MODULE_ID}/templates/store-manager.hbs`;
 const GM_FILTERS_SETTING = "gmFilters";
 const SHOW_STORE_BUTTON_SETTING = "showStoreButtonForPlayers";
 const WISHLIST_SETTING = "wishlistState";
 const WISHLIST_CLIENT_SETTING = "wishlistStateClient";
+const STORE_DEFINITIONS_SETTING = "storeDefinitions";
+const ACTIVE_STORE_SETTING = "activeStoreId";
+const ACTIVE_STORE_SCENE_FLAG = "activeStoreId";
 const PACK_INDEX_CACHE = new Map();
 const SPELL_PACK_INDEX_CACHE = new Map();
 const ITEM_INDEX_CACHE = new Map();
@@ -753,6 +757,91 @@ async function setCurrentGmFilters(filters) {
   refreshOpenStoreDialogs();
 }
 
+function getStoreDefinitions() {
+  return game.settings?.get(MODULE_ID, STORE_DEFINITIONS_SETTING) ?? {};
+}
+
+async function setStoreDefinitions(definitions) {
+  const normalized = definitions && typeof definitions === "object" ? definitions : {};
+  await game.settings.set(MODULE_ID, STORE_DEFINITIONS_SETTING, normalized);
+  game.socket?.emit(`module.${MODULE_ID}`, { type: "storeDefinitionsUpdate" });
+  refreshOpenStoreDialogs();
+  return normalized;
+}
+
+function getActiveStoreId() {
+  const sceneValue = canvas?.scene?.getFlag?.(MODULE_ID, ACTIVE_STORE_SCENE_FLAG) ?? null;
+  if (typeof sceneValue === "string" && sceneValue.length) {
+    return sceneValue;
+  }
+
+  const fallback = game.settings?.get(MODULE_ID, ACTIVE_STORE_SETTING) ?? "";
+  return typeof fallback === "string" && fallback.length ? fallback : null;
+}
+
+async function setActiveStoreId(storeId) {
+  const value = typeof storeId === "string" ? storeId : "";
+  if (canvas?.scene?.setFlag) {
+    await canvas.scene.setFlag(MODULE_ID, ACTIVE_STORE_SCENE_FLAG, value);
+  } else {
+    await game.settings.set(MODULE_ID, ACTIVE_STORE_SETTING, value);
+  }
+
+  game.socket?.emit(`module.${MODULE_ID}`, { type: "activeStoreUpdate", storeId: value });
+  refreshOpenStoreDialogs();
+}
+
+function getActiveStore() {
+  const definitions = getStoreDefinitions();
+  const id = getActiveStoreId();
+  if (!id) {
+    return null;
+  }
+
+  const store = definitions?.[id] ?? null;
+  return store && typeof store === "object" ? store : null;
+}
+
+function formatActiveStoreLabel(store) {
+  if (!store) {
+    return "Kein Shop gewählt";
+  }
+
+  const name = store.name ?? "Unbenannter Shop";
+  const kind =
+    store.kind === "npc" ? "NPC" : store.kind === "settlement" ? "Settlement" : null;
+  return kind ? `${name} (${kind})` : name;
+}
+
+function getEffectiveShopFilters() {
+  const store = getActiveStore();
+  if (store?.filters) {
+    return normalizeGmFilters(store.filters);
+  }
+  return getCurrentGmFilters();
+}
+
+function generateStoreId() {
+  try {
+    const rid = foundry?.utils?.randomID?.(16);
+    if (typeof rid === "string" && rid.length) {
+      return rid;
+    }
+  } catch (_err) {
+    // ignore
+  }
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function escapeHtmlSafe(value) {
+  const str = value == null ? "" : String(value);
+  try {
+    return foundry?.utils?.escapeHTML ? foundry.utils.escapeHTML(str) : str;
+  } catch (_err) {
+    return str;
+  }
+}
+
 function isLegacyItem(entry) {
   const legacyFlag = entry?.flags?.pf2e?.legacy;
   if (legacyFlag === true) {
@@ -920,16 +1009,26 @@ function refreshOpenStoreDialogs() {
   if (!activeDialogs.length) {
     return;
   }
-  const filters = getCurrentGmFilters();
+
+  const filters = getEffectiveShopFilters();
+  const storeLabel = formatActiveStoreLabel(getActiveStore());
+
   activeDialogs.forEach((dialog) => {
     const searchInput = dialog.querySelector('input[name="store-search"]');
     const resultsList = dialog.querySelector(".store-results ul");
     if (!searchInput || !resultsList) {
       return;
     }
+
+    const labelTarget = dialog.querySelector("[data-active-store-label]");
+    if (labelTarget) {
+      labelTarget.textContent = storeLabel;
+    }
+
     void updateSearchResults(searchInput.value ?? "", $(resultsList), filters);
   });
 }
+
 
 function renderSearchLoading(listElement) {
   listElement.empty();
@@ -1958,6 +2057,7 @@ async function openShopDialog(actor) {
   const logoAlt = game.system?.title
     ? `${game.system.title} Logo`
     : "System-Logo";
+  const activeStoreLabel = formatActiveStoreLabel(getActiveStore());
   const content = await renderTemplate(SHOP_DIALOG_TEMPLATE, {
     actorName,
     actorTokenSrc,
@@ -1965,6 +2065,7 @@ async function openShopDialog(actor) {
     partyGold,
     logoSrc: systemLogo,
     logoAlt,
+    activeStoreLabel,
   });
 
   const dialog = new Dialog(
@@ -2352,7 +2453,8 @@ async function openShopDialog(actor) {
     void getCachedItemIndexEntries();
     void getCachedSpellIndexEntries();
     const debouncedSearch = debounce((value) => {
-      void updateSearchResults(value, resultsList);
+      const filters = getEffectiveShopFilters();
+      void updateSearchResults(value, resultsList, filters);
     });
 
     searchInput.on("input", (event) => {
@@ -2363,7 +2465,8 @@ async function openShopDialog(actor) {
       "change",
       'input[name="filter-spell"], input[name="filter-item"]',
       () => {
-        void updateSearchResults(searchInput.val() ?? "", resultsList);
+        const filters = getEffectiveShopFilters();
+        void updateSearchResults(searchInput.val() ?? "", resultsList, filters);
       }
     );
 
@@ -2383,7 +2486,226 @@ async function openShopDialog(actor) {
     });
 
     updateCartSummary();
-    void updateSearchResults(searchInput.val() ?? "", resultsList);
+    {
+      const filters = getEffectiveShopFilters();
+      void updateSearchResults(searchInput.val() ?? "", resultsList, filters);
+    }
+  });
+}
+
+
+async function openStoreManager() {
+  if (!game.user?.isGM) {
+    return;
+  }
+
+  const definitions = getStoreDefinitions();
+  const activeId = getActiveStoreId() ?? "";
+  const stores = Object.entries(definitions)
+    .map(([id, store]) => ({
+      id,
+      name: store?.name ?? "",
+      kind: store?.kind ?? "settlement",
+      traitsInput: formatTraitsInput(store?.filters?.traits ?? []),
+      minLevel: Number.isFinite(Number(store?.filters?.minLevel)) ? Number(store.filters.minLevel) : "",
+      maxLevel: Number.isFinite(Number(store?.filters?.maxLevel)) ? Number(store.filters.maxLevel) : "",
+      rarity: store?.filters?.rarity ?? "",
+      isNpc: (store?.kind ?? "settlement") === "npc",
+      isCommon: (store?.filters?.rarity ?? "") === "common",
+      isUncommon: (store?.filters?.rarity ?? "") === "uncommon",
+      isRare: (store?.filters?.rarity ?? "") === "rare",
+      isUnique: (store?.filters?.rarity ?? "") === "unique",
+      isActive: id === activeId,
+    }))
+    .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "", game.i18n?.lang ?? "de"));
+
+  const content = await renderTemplate(STORE_MANAGER_TEMPLATE, {
+    stores,
+    activeId,
+    hasScene: Boolean(canvas?.scene),
+  });
+
+  const dialog = new Dialog(
+    {
+      title: "General Store: Shops (Settlements/NPCs)",
+      content,
+      buttons: {
+        manageStores: {
+          label: "Settlements/NPCs",
+          callback: () => {
+            void openStoreManager();
+            return true;
+          },
+        },
+        save: {
+          label: "Speichern",
+          callback: (html) => {
+            const form = html[0]?.querySelector("form");
+            if (!form) {
+              return false;
+            }
+
+            const rows = Array.from(form.querySelectorAll(".store-manager__row"));
+            const nextDefinitions = {};
+            for (const row of rows) {
+              const id = row.dataset.storeId;
+              if (!id) {
+                continue;
+              }
+
+              const name = row.querySelector(".store-manager__name")?.value?.trim() ?? "";
+              if (!name) {
+                ui.notifications.warn("Jeder Shop braucht einen Namen.");
+                return false;
+              }
+
+              const kind =
+                row.querySelector(".store-manager__kind")?.value === "npc" ? "npc" : "settlement";
+              const traitsValue = row.querySelector(".store-manager__traits")?.value ?? "";
+              const minValue = row.querySelector(".store-manager__min")?.value ?? "";
+              const maxValue = row.querySelector(".store-manager__max")?.value ?? "";
+              const rarityValue = row.querySelector(".store-manager__rarity")?.value ?? "";
+
+              const minLevel = minValue === "" ? null : Number(minValue);
+              const maxLevel = maxValue === "" ? null : Number(maxValue);
+
+              nextDefinitions[id] = {
+                id,
+                name,
+                kind,
+                filters: {
+                  traits: parseTraitsInput(traitsValue),
+                  minLevel: Number.isFinite(minLevel) ? minLevel : null,
+                  maxLevel: Number.isFinite(maxLevel) ? maxLevel : null,
+                  rarity: rarityValue,
+                },
+              };
+            }
+
+            const nextActiveId = form.querySelector('select[name="active-store"]')?.value ?? "";
+            void (async () => {
+              await setStoreDefinitions(nextDefinitions);
+              await setActiveStoreId(nextActiveId);
+              ui.notifications.info("Shops gespeichert.");
+            })();
+
+            return true;
+          },
+        },
+        close: {
+          label: "Schließen",
+        },
+      },
+      default: "save",
+    },
+    {
+      width: 820,
+      height: 650,
+      resizable: true,
+    }
+  );
+
+  dialog.render(true);
+
+  Hooks.once("renderDialog", (app, html) => {
+    if (app !== dialog) {
+      return;
+    }
+
+    const addRow = (store = null) => {
+      const id = store?.id ?? generateStoreId();
+      const name = store?.name ?? "";
+      const kind = store?.kind ?? "settlement";
+      const traitsInput = store?.traitsInput ?? "";
+      const minLevel = store?.minLevel ?? "";
+      const maxLevel = store?.maxLevel ?? "";
+      const rarity = store?.rarity ?? "";
+
+      const rarityOptions = [
+        { value: "", label: "Alle" },
+        { value: "common", label: "Common" },
+        { value: "uncommon", label: "Uncommon" },
+        { value: "rare", label: "Rare" },
+        { value: "unique", label: "Unique" },
+      ];
+
+      const rarityHtml = rarityOptions
+        .map((opt) => {
+          const selected = opt.value === rarity ? 'selected="selected"' : "";
+          return `<option value="${opt.value}" ${selected}>${opt.label}</option>`;
+        })
+        .join("");
+
+      const kindSettlementSelected = kind !== "npc" ? 'selected="selected"' : "";
+      const kindNpcSelected = kind === "npc" ? 'selected="selected"' : "";
+
+      const rowHtml = $(`
+        <tr class="store-manager__row" data-store-id="${id}">
+          <td>
+            <input type="text" class="store-manager__name" value="${escapeHtmlSafe(name)}" placeholder="z.B. Otari – Krämerladen" />
+          </td>
+          <td>
+            <select class="store-manager__kind">
+              <option value="settlement" ${kindSettlementSelected}>Settlement</option>
+              <option value="npc" ${kindNpcSelected}>NPC</option>
+            </select>
+          </td>
+          <td class="store-manager__num">
+            <input type="number" class="store-manager__min" value="${minLevel}" min="0" />
+          </td>
+          <td class="store-manager__num">
+            <input type="number" class="store-manager__max" value="${maxLevel}" min="0" />
+          </td>
+          <td>
+            <select class="store-manager__rarity">${rarityHtml}</select>
+          </td>
+          <td>
+            <input type="text" class="store-manager__traits" value="${escapeHtmlSafe(traitsInput)}" placeholder="traits, kommagetrennt" />
+          </td>
+          <td class="store-manager__actions">
+            <button type="button" class="store-manager__delete" title="Shop löschen">
+              <i class="fas fa-trash" aria-hidden="true"></i>
+            </button>
+          </td>
+        </tr>
+      `);
+
+      html.find("tbody.store-manager__tbody").append(rowHtml);
+
+      const activeSelect = html.find('select[name="active-store"]');
+      if (activeSelect.length) {
+        const option = $(`<option value="${id}">${escapeHtmlSafe(name || "(Neuer Shop)")}</option>`);
+        activeSelect.append(option);
+      }
+    };
+
+    html.on("click", ".store-manager__add", () => {
+      addRow();
+    });
+
+    html.on("click", ".store-manager__delete", (event) => {
+      const row = $(event.currentTarget).closest(".store-manager__row");
+      const id = row.data("storeId");
+      row.remove();
+
+      const activeSelect = html.find('select[name="active-store"]');
+      activeSelect.find(`option[value="${id}"]`).remove();
+
+      if (activeSelect.val() === id) {
+        activeSelect.val("");
+      }
+    });
+
+    html.on("input", ".store-manager__name", (event) => {
+      const row = $(event.currentTarget).closest(".store-manager__row");
+      const id = row.data("storeId");
+      const value = String(event.currentTarget.value ?? "").trim();
+      const activeSelect = html.find('select[name="active-store"]');
+      const opt = activeSelect.find(`option[value="${id}"]`);
+      if (opt.length) {
+        opt.text(value || "(Neuer Shop)");
+      }
+    });
   });
 }
 
@@ -2412,6 +2734,13 @@ function openGmMenu() {
       title: "General Store (GM)",
       content: htmlContent,
       buttons: {
+        manageStores: {
+          label: "Settlements/NPCs",
+          callback: () => {
+            void openStoreManager();
+            return true;
+          },
+        },
         save: {
           label: "Filter speichern",
           callback: (html) => {
@@ -2497,23 +2826,41 @@ function addGmControlsButton(app, html) {
 
   const controlsRoot = html.closest("#controls");
   const targetContainer = controlsRoot.find(".main-controls, .control-tools").first();
-  if (!targetContainer.length || targetContainer.find(".pf2e-general-store-control").length) {
+  if (!targetContainer.length) {
     return;
   }
 
-  const button = $(`
-    <li class="control-tool pf2e-general-store-control" title="General Store (GM)">
-      <i class="fas fa-store" aria-hidden="true"></i>
-    </li>
-  `);
+  if (!targetContainer.find(".pf2e-general-store-control").length) {
+    const storeButton = $(`
+      <li class="control-tool pf2e-general-store-control" title="General Store (GM)">
+        <i class="fas fa-store" aria-hidden="true"></i>
+      </li>
+    `);
 
-  button.on("click", (event) => {
-    event.preventDefault();
-    openGmMenu();
-  });
+    storeButton.on("click", (event) => {
+      event.preventDefault();
+      openGmMenu();
+    });
 
-  targetContainer.append(button);
+    targetContainer.append(storeButton);
+  }
+
+  if (!targetContainer.find(".pf2e-general-store-stores-control").length) {
+    const storesButton = $(`
+      <li class="control-tool pf2e-general-store-stores-control" title="General Store: Shops verwalten">
+        <i class="fas fa-city" aria-hidden="true"></i>
+      </li>
+    `);
+
+    storesButton.on("click", (event) => {
+      event.preventDefault();
+      void openStoreManager();
+    });
+
+    targetContainer.append(storesButton);
+  }
 }
+
 
 function addGmChatControlButton(app, html) {
   if (!game.user?.isGM) {
@@ -2575,10 +2922,14 @@ function addGmChatControlButton(app, html) {
 
 function invalidateCompendiumCaches() {
   PACK_INDEX_CACHE.clear();
+  SPELL_PACK_INDEX_CACHE.clear();
   ITEM_INDEX_CACHE.clear();
+  SPELL_INDEX_CACHE.clear();
   ITEM_DESCRIPTION_CACHE.clear();
   itemIndexBuildPromise = null;
+  spellIndexBuildPromise = null;
 }
+
 
 export function registerPF2eGeneralStore() {
   Hooks.on("renderActorSheet", addActorSheetHeaderControl);
@@ -2617,7 +2968,21 @@ Hooks.once("init", () => {
     type: Object,
     default: DEFAULT_WISHLIST_STATE,
   });
-  invalidateCompendiumCaches();
+  game.settings.register(MODULE_ID, STORE_DEFINITIONS_SETTING, {
+    name: "General Store: Shop-Definitionen (Settlements/NPCs)",
+    scope: "world",
+    config: false,
+    type: Object,
+    default: {},
+  });
+  game.settings.register(MODULE_ID, ACTIVE_STORE_SETTING, {
+    name: "General Store: Aktiver Shop (Fallback)",
+    scope: "world",
+    config: false,
+    type: String,
+    default: "",
+  });
+    invalidateCompendiumCaches();
   registerPF2eGeneralStore();
 });
 
@@ -2632,6 +2997,14 @@ Hooks.once("ready", () => {
   game.socket?.on(`module.${MODULE_ID}`, (payload) => {
     if (payload?.type === "gmFiltersUpdate") {
       currentGmFilters = normalizeGmFilters(payload.filters ?? {});
+      refreshOpenStoreDialogs();
+      return;
+    }
+    if (payload?.type === "storeDefinitionsUpdate") {
+      refreshOpenStoreDialogs();
+      return;
+    }
+    if (payload?.type === "activeStoreUpdate") {
       refreshOpenStoreDialogs();
       return;
     }

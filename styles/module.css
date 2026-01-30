@@ -609,3 +609,9 @@
   font-size: 0.85rem;
   opacity: 0.85;
 }
+
+
+/* Logo picker */
+.store-logo { cursor: pointer; }
+.store-logo:hover { filter: brightness(1.05); }
+.store-logo:active { filter: brightness(0.95); }

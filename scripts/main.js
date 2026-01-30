@@ -940,13 +940,20 @@ function renderSearchResults(results, listElement) {
   renderBatch(0);
 }
 
-function updateSearchHint(listElement, message) {
+function updateSearchHint(listElement, message, options = {}) {
   const dialog = listElement.closest(".pf2e-general-store-dialog");
   const hintElement = dialog.find("[data-search-hint]");
   if (!hintElement.length) {
     return;
   }
-  hintElement.text(message ?? "");
+  const isAlphabeticalSort = options?.isAlphabeticalSort ?? false;
+  const hintMessage = [
+    message ?? "",
+    isAlphabeticalSort ? "Alphabetisch sortiert." : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  hintElement.text(hintMessage);
 }
 
 function getDescriptionContainer(listElement) {
@@ -1036,22 +1043,11 @@ function renderSearchLoading(listElement) {
 }
 
 async function updateSearchResults(query, listElement, gmFiltersOverride) {
-  const searchTerm = query.trim().toLowerCase();
-  const hasSearchTerm = searchTerm.length > 0;
-  if (hasSearchTerm && searchTerm.length < MIN_SEARCH_LENGTH) {
-    renderSearchResults([], listElement);
-    resetResultSelection(listElement);
-    updateSearchHint(
-      listElement,
-      `Bitte mindestens ${MIN_SEARCH_LENGTH} Zeichen eingeben.`
-    );
-    return;
-  }
-
   const dialog = listElement.closest(".pf2e-general-store-dialog");
   const spellFilter = dialog.find('input[name="filter-spell"]');
   const itemFilter = dialog.find('input[name="filter-item"]');
   const itemTypeFilter = dialog.find('select[name="filter-item-type"]');
+  const sortAlphaFilter = dialog.find('input[name="filter-sort-alpha"]');
   const selectedItemType = itemTypeFilter.length
     ? itemTypeFilter.val() ?? ""
     : "";
@@ -1060,10 +1056,26 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
     : "Alle";
   const hasSpellFilter = spellFilter.length ? spellFilter.prop("checked") : false;
   const hasItemFilter = itemFilter.length ? itemFilter.prop("checked") : false;
+  const isAlphabeticalSort = sortAlphaFilter.length
+    ? sortAlphaFilter.prop("checked")
+    : false;
   const showSpells = hasSpellFilter || (!hasSpellFilter && !hasItemFilter);
   const showItems = hasItemFilter || (!hasSpellFilter && !hasItemFilter);
   const noSpellPacksAvailable =
     hasSpellFilter && getSpellCompendiumPacks().length === 0;
+
+  const searchTerm = query.trim().toLowerCase();
+  const hasSearchTerm = searchTerm.length > 0;
+  if (hasSearchTerm && searchTerm.length < MIN_SEARCH_LENGTH) {
+    renderSearchResults([], listElement);
+    resetResultSelection(listElement);
+    updateSearchHint(
+      listElement,
+      `Bitte mindestens ${MIN_SEARCH_LENGTH} Zeichen eingeben.`,
+      { isAlphabeticalSort }
+    );
+    return;
+  }
 
   const gmFilters = gmFiltersOverride ?? getCurrentGmFilters();
   const itemEntriesPromise = showItems
@@ -1078,7 +1090,7 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
   ) {
     renderSearchLoading(listElement);
     resetResultSelection(listElement);
-    updateSearchHint(listElement, "");
+    updateSearchHint(listElement, "", { isAlphabeticalSort });
   }
 
   const [itemEntries, spellEntries] = await Promise.all([
@@ -1126,6 +1138,11 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
     }));
 
   const results = [...itemResults, ...spellResults];
+  if (isAlphabeticalSort) {
+    results.sort((a, b) =>
+      a.name.localeCompare(b.name, game.i18n?.lang ?? "de")
+    );
+  }
 
   const isTruncated = results.length > MAX_SEARCH_RESULTS;
   const limitedResults = isTruncated
@@ -1153,7 +1170,8 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
         : null,
     ]
       .filter(Boolean)
-      .join(" ")
+      .join(" "),
+    { isAlphabeticalSort }
   );
 }
 
@@ -2538,7 +2556,7 @@ async function openShopDialog(actor) {
 
     html.on(
       "change",
-      'input[name="filter-spell"], input[name="filter-item"], select[name="filter-item-type"]',
+      'input[name="filter-spell"], input[name="filter-item"], select[name="filter-item-type"], input[name="filter-sort-alpha"]',
       () => {
         {
       const filters = getEffectiveShopFilters();

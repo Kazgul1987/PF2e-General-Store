@@ -997,6 +997,19 @@ function entryMatchesGmFilters(entry, filters) {
   return true;
 }
 
+function entryMatchesItemType(entry, selectedItemType) {
+  if (!selectedItemType) {
+    return true;
+  }
+  if (selectedItemType === "ammo") {
+    return (
+      entry.type === "consumable" &&
+      entry.system?.consumableType === "ammo"
+    );
+  }
+  return entry.type === selectedItemType;
+}
+
 function refreshOpenStoreDialogs() {
   const activeDialogs = document.querySelectorAll(".pf2e-general-store-dialog");
   if (!activeDialogs.length) {
@@ -1024,13 +1037,8 @@ function renderSearchLoading(listElement) {
 
 async function updateSearchResults(query, listElement, gmFiltersOverride) {
   const searchTerm = query.trim().toLowerCase();
-  if (!searchTerm) {
-    renderSearchResults([], listElement);
-    resetResultSelection(listElement);
-    updateSearchHint(listElement, "");
-    return;
-  }
-  if (searchTerm.length < MIN_SEARCH_LENGTH) {
+  const hasSearchTerm = searchTerm.length > 0;
+  if (hasSearchTerm && searchTerm.length < MIN_SEARCH_LENGTH) {
     renderSearchResults([], listElement);
     resetResultSelection(listElement);
     updateSearchHint(
@@ -1043,6 +1051,13 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
   const dialog = listElement.closest(".pf2e-general-store-dialog");
   const spellFilter = dialog.find('input[name="filter-spell"]');
   const itemFilter = dialog.find('input[name="filter-item"]');
+  const itemTypeFilter = dialog.find('select[name="filter-item-type"]');
+  const selectedItemType = itemTypeFilter.length
+    ? itemTypeFilter.val() ?? ""
+    : "";
+  const itemTypeLabel = itemTypeFilter.length
+    ? itemTypeFilter.find(`option[value="${selectedItemType}"]`).text() || "Alle"
+    : "Alle";
   const hasSpellFilter = spellFilter.length ? spellFilter.prop("checked") : false;
   const hasItemFilter = itemFilter.length ? itemFilter.prop("checked") : false;
   const showSpells = hasSpellFilter || (!hasSpellFilter && !hasItemFilter);
@@ -1073,8 +1088,11 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
 
   const itemResults = itemEntries
     .filter(({ entry }) => isAllowedItemEntry(entry))
+    .filter(({ entry }) => entryMatchesItemType(entry, selectedItemType))
     .filter(({ entry }) => entryMatchesGmFilters(entry, gmFilters))
-    .filter(({ entry }) => entry.name?.toLowerCase().includes(searchTerm))
+    .filter(({ entry }) =>
+      hasSearchTerm ? entry.name?.toLowerCase().includes(searchTerm) : true
+    )
     .map(({ entry, pack }) => ({
       entryType: "item",
       icon: entry.img ?? "icons/svg/item-bag.svg",
@@ -1091,7 +1109,9 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
   const spellResults = spellEntries
     .filter(({ entry }) => !isSpellRitual(entry))
     .filter(({ entry }) => entryMatchesGmFilters(entry, gmFilters))
-    .filter(({ entry }) => entry.name?.toLowerCase().includes(searchTerm))
+    .filter(({ entry }) =>
+      hasSearchTerm ? entry.name?.toLowerCase().includes(searchTerm) : true
+    )
     .map(({ entry, pack }) => ({
       entryType: "spell",
       icon: entry.img ?? "icons/svg/book.svg",
@@ -1119,6 +1139,14 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
     [
       noSpellPacksAvailable
         ? "Keine Spell-Compendien verfügbar/zugänglich."
+        : null,
+      !hasSearchTerm
+        ? [
+            showItems ? `Treffer ${itemTypeLabel}: ${itemResults.length}` : null,
+            showSpells ? `Treffer Spells: ${spellResults.length}` : null,
+          ]
+            .filter(Boolean)
+            .join(" | ")
         : null,
       isTruncated
         ? `Zeige erste ${MAX_SEARCH_RESULTS} Treffer. Bitte Suche weiter eingrenzen.`
@@ -2510,7 +2538,7 @@ async function openShopDialog(actor) {
 
     html.on(
       "change",
-      'input[name="filter-spell"], input[name="filter-item"]',
+      'input[name="filter-spell"], input[name="filter-item"], select[name="filter-item-type"]',
       () => {
         {
       const filters = getEffectiveShopFilters();

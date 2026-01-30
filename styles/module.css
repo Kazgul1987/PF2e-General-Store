@@ -166,6 +166,16 @@
   padding: 0;
 }
 
+.pf2e-general-store-dialog .store-results__more {
+  display: block;
+  margin-top: 0.5rem;
+  width: 100%;
+}
+
+.pf2e-general-store-dialog .store-results__more.is-hidden {
+  display: none;
+}
+
 .pf2e-general-store-dialog .store-result {
   padding: 0.35rem 0;
 }

@@ -859,6 +859,7 @@ function isLegacyItem(entry) {
 
 const MIN_SEARCH_LENGTH = 2;
 const MAX_SEARCH_RESULTS = 100;
+const SEARCH_RESULTS_INCREMENT = 100;
 const SEARCH_RENDER_BATCH_SIZE = 50;
 
 function renderSearchResults(results, listElement) {
@@ -947,6 +948,7 @@ function updateSearchHint(listElement, message, options = {}) {
     return;
   }
   const isAlphabeticalSort = options?.isAlphabeticalSort ?? false;
+  const showMoreButton = options?.showMoreButton ?? false;
   const hintMessage = [
     message ?? "",
     isAlphabeticalSort ? "Alphabetisch sortiert." : null,
@@ -954,6 +956,19 @@ function updateSearchHint(listElement, message, options = {}) {
     .filter(Boolean)
     .join(" ");
   hintElement.text(hintMessage);
+  const moreButton = dialog.find(".store-results__more");
+  if (moreButton.length) {
+    moreButton.toggleClass("is-hidden", !showMoreButton);
+  }
+}
+
+function getResultLimit(listElement) {
+  const rawLimit = Number(listElement.data("resultLimit"));
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : MAX_SEARCH_RESULTS;
+  if (!Number.isFinite(rawLimit) || rawLimit <= 0) {
+    listElement.data("resultLimit", limit);
+  }
+  return limit;
 }
 
 function getDescriptionContainer(listElement) {
@@ -1144,10 +1159,9 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
     );
   }
 
-  const isTruncated = results.length > MAX_SEARCH_RESULTS;
-  const limitedResults = isTruncated
-    ? results.slice(0, MAX_SEARCH_RESULTS)
-    : results;
+  const resultLimit = getResultLimit(listElement);
+  const isTruncated = results.length > resultLimit;
+  const limitedResults = isTruncated ? results.slice(0, resultLimit) : results;
 
   renderSearchResults(limitedResults, listElement);
   resetResultSelection(listElement);
@@ -1166,12 +1180,12 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
             .join(" | ")
         : null,
       isTruncated
-        ? `Zeige erste ${MAX_SEARCH_RESULTS} Treffer. Bitte Suche weiter eingrenzen.`
+        ? `Zeige erste ${resultLimit} Treffer. Bitte Suche weiter eingrenzen.`
         : null,
     ]
       .filter(Boolean)
       .join(" "),
-    { isAlphabeticalSort }
+    { isAlphabeticalSort, showMoreButton: isTruncated }
   );
 }
 
@@ -2541,6 +2555,9 @@ async function openShopDialog(actor) {
     const searchInput = html.find('input[name="store-search"]');
     const resultsList = html.find(".store-results ul");
     resultsList.data("actor", actor ?? null);
+    if (!Number.isFinite(Number(resultsList.data("resultLimit")))) {
+      resultsList.data("resultLimit", MAX_SEARCH_RESULTS);
+    }
     void getCachedItemIndexEntries();
     void getCachedSpellIndexEntries();
     const debouncedSearch = debounce((value) => {
@@ -2572,6 +2589,12 @@ async function openShopDialog(actor) {
     });
     html.on("click", ".store-wishlist__add", () => {
       void addSelectedItemToWishlist();
+    });
+    html.on("click", ".store-results__more", () => {
+      const currentLimit = getResultLimit(resultsList);
+      resultsList.data("resultLimit", currentLimit + SEARCH_RESULTS_INCREMENT);
+      const filters = getEffectiveShopFilters();
+      void updateSearchResults(searchInput.val() ?? "", resultsList, filters);
     });
     html.on("click", ".store-cart__view", () => {
       void openCartDialog();

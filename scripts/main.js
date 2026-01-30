@@ -1838,66 +1838,6 @@ function openSpellConsumableSelectionDialog(spell) {
       if (app !== dialog) {
         return;
       }
-
-
-    // Shop-Logo auswählen (nur GM): Klick öffnet FilePicker, Shift+Klick setzt zurück
-    const logoContainer = html.find(".store-logo");
-    if (logoContainer.length && game.user?.isGM) {
-      logoContainer.addClass("store-logo--clickable");
-      logoContainer.attr(
-        "title",
-        "Klick: Logo wählen • Shift+Klick: Logo zurücksetzen"
-      );
-
-      logoContainer.off("click.pf2eGeneralStoreLogo");
-      logoContainer.on("click.pf2eGeneralStoreLogo", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-
-        if (event.shiftKey) {
-          void (async () => {
-            await game.settings.set(MODULE_ID, SHOP_LOGO_SETTING, "");
-            ui.notifications.info("Shop-Logo zurückgesetzt.");
-            refreshOpenStoreDialogs();
-          })();
-          return;
-        }
-
-        const FP =
-          globalThis.FilePicker ?? foundry?.applications?.apps?.FilePicker ?? null;
-
-        if (!FP) {
-          ui.notifications.error("FilePicker ist nicht verfügbar.");
-          return;
-        }
-
-        const current = getCurrentShopLogo("");
-        const picker = new FP({
-          type: "image",
-          current,
-          callback: (path) => {
-            void (async () => {
-              const value = typeof path === "string" ? path : "";
-              await game.settings.set(MODULE_ID, SHOP_LOGO_SETTING, value);
-              ui.notifications.info("Shop-Logo gespeichert.");
-              refreshOpenStoreDialogs();
-            })();
-          },
-        });
-
-        try {
-          picker.render(true);
-        } catch (err) {
-          console.error(`${MODULE_ID} | FilePicker render failed`, err);
-          try {
-            picker.browse();
-          } catch (err2) {
-            console.error(`${MODULE_ID} | FilePicker browse failed`, err2);
-            ui.notifications.error("Konnte FilePicker nicht öffnen. Siehe Konsole.");
-          }
-        }
-      });
-    }
       const typeSelect = html.find("#pf2e-general-store-spell-type");
       const rankSelect = html.find("#pf2e-general-store-spell-rank");
       const updateRankOptions = (type) => {
@@ -2137,6 +2077,65 @@ async function openShopDialog(actor) {
   Hooks.once("renderDialog", (app, html) => {
     if (app !== dialog) {
       return;
+    }
+
+    // Shop-Logo auswählen (nur GM): Klick öffnet FilePicker, Shift+Klick setzt zurück
+    const logoContainer = html.find(".store-logo");
+    if (logoContainer.length && game.user?.isGM) {
+      logoContainer.addClass("store-logo--clickable");
+      logoContainer.attr(
+        "title",
+        "Klick: Logo wählen • Shift+Klick: Logo zurücksetzen"
+      );
+
+      logoContainer.off("click.pf2eGeneralStoreLogo");
+      logoContainer.on("click.pf2eGeneralStoreLogo", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (event.shiftKey) {
+          void (async () => {
+            await game.settings.set(MODULE_ID, SHOP_LOGO_SETTING, "");
+            ui.notifications.info("Shop-Logo zurückgesetzt.");
+            refreshOpenStoreDialogs();
+          })();
+          return;
+        }
+
+        const FP =
+          globalThis.FilePicker ?? foundry?.applications?.apps?.FilePicker ?? null;
+
+        if (!FP) {
+          ui.notifications.error("FilePicker ist nicht verfügbar.");
+          return;
+        }
+
+        const current = getCurrentShopLogo("");
+        const picker = new FP({
+          type: "image",
+          current,
+          callback: (path) => {
+            void (async () => {
+              const value = typeof path === "string" ? path : "";
+              await game.settings.set(MODULE_ID, SHOP_LOGO_SETTING, value);
+              ui.notifications.info("Shop-Logo gespeichert.");
+              refreshOpenStoreDialogs();
+            })();
+          },
+        });
+
+        try {
+          picker.render(true);
+        } catch (err) {
+          console.error(`${MODULE_ID} | FilePicker render failed`, err);
+          try {
+            picker.browse();
+          } catch (err2) {
+            console.error(`${MODULE_ID} | FilePicker browse failed`, err2);
+            ui.notifications.error("Konnte FilePicker nicht öffnen. Siehe Konsole.");
+          }
+        }
+      });
     }
 
     const cartItems = new Map();

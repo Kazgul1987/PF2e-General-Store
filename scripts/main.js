@@ -3,6 +3,8 @@ const SHOP_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/shop-dialog.hbs`;
 const GM_FILTERS_TEMPLATE = `modules/${MODULE_ID}/templates/gm-filters.hbs`;
 const WISHLIST_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/wishlist-dialog.hbs`;
 const STORE_MANAGER_TEMPLATE = `modules/${MODULE_ID}/templates/store-manager.hbs`;
+
+const STORE_LOGO_SETTING = "storeLogoPath";
 const GM_FILTERS_SETTING = "gmFilters";
 const SHOW_STORE_BUTTON_SETTING = "showStoreButtonForPlayers";
 const WISHLIST_SETTING = "wishlistState";
@@ -827,6 +829,44 @@ function escapeHtmlSafe(value) {
   }
 }
 
+
+function getStoreLogoPath() {
+  const value = game.settings?.get(MODULE_ID, STORE_LOGO_SETTING);
+  return typeof value === "string" && value.trim().length ? value.trim() : "";
+}
+
+async function setStoreLogoPath(path) {
+  const value = typeof path === "string" ? path.trim() : "";
+  await game.settings.set(MODULE_ID, STORE_LOGO_SETTING, value);
+  game.socket?.emit(`module.${MODULE_ID}`, { type: "storeLogoUpdate", path: value });
+  refreshOpenStoreDialogs();
+}
+
+function updateLogoElement($dialogRoot, logoSrc, logoAlt) {
+  const container = $dialogRoot.find(".store-logo").first();
+  if (!container.length) return;
+
+  const src = typeof logoSrc === "string" && logoSrc.length ? logoSrc : "";
+  const alt = typeof logoAlt === "string" && logoAlt.length ? logoAlt : "Logo";
+
+  const img = container.find("img.store-logo__image");
+  const placeholder = container.find(".store-logo__placeholder");
+
+  if (src) {
+    if (img.length) {
+      img.attr("src", src);
+      img.attr("alt", alt);
+    } else {
+      placeholder.remove();
+      container.html(`<img class="store-logo__image" src="${escapeHtmlSafe(src)}" alt="${escapeHtmlSafe(alt)}" />`);
+    }
+  } else {
+    if (img.length) img.remove();
+    if (!placeholder.length) container.html(`<span class="store-logo__placeholder">Logo</span>`);
+  }
+}
+
+
 function isLegacyItem(entry) {
   const legacyFlag = entry?.flags?.pf2e?.legacy;
   if (legacyFlag === true) {
@@ -996,7 +1036,10 @@ function refreshOpenStoreDialogs() {
   }
   const filters = getEffectiveShopFilters();
   const storeLabel = formatActiveStoreLabel(getActiveStore());
-  activeDialogs.forEach((dialog) => {
+    const customLogo = getStoreLogoPath();
+  const systemLogo = game.system?.logo ?? game.system?.data?.logo ?? game.system?.data?.media?.logo ?? game.system?.data?.media?.icon ?? "";
+  const logoAlt = game.system?.title ? `${game.system.title} Logo` : "System-Logo";
+activeDialogs.forEach((dialog) => {
     const searchInput = dialog.querySelector('input[name="store-search"]');
     const resultsList = dialog.querySelector(".store-results ul");
     if (!searchInput || !resultsList) {
@@ -1826,9 +1869,39 @@ function openSpellConsumableSelectionDialog(spell) {
     dialog.render(true);
 
     Hooks.once("renderDialog", (app, html) => {
-      if (app !== dialog) {
-        return;
-      }
+    if (app !== dialog) {
+      return;
+    }
+
+    const $root = html.find(".pf2e-general-store-dialog").first();
+    $root.attr("data-system-logo-src", systemLogo ?? "");
+
+    // Logo picker (GM): click logo opens FilePicker, Shift+click resets to system logo
+    if (game.user?.isGM) {
+      html.on("click", ".store-logo", async (event) => {
+        event.preventDefault();
+
+        if (event.shiftKey) {
+          await setStoreLogoPath("");
+          const fallback = $root.attr("data-system-logo-src") || "";
+          const resolved = fallback || "";
+          updateLogoElement($root, resolved, logoAlt);
+          return;
+        }
+
+        const current = getStoreLogoPath() || ($root.attr("data-system-logo-src") || "");
+        const picker = new FilePicker({
+          type: "image",
+          current,
+          callback: async (path) => {
+            await setStoreLogoPath(path);
+            updateLogoElement($root, path || ($root.attr("data-system-logo-src") || ""), logoAlt);
+          },
+        });
+        picker.render(true);
+      });
+    }
+
       const typeSelect = html.find("#pf2e-general-store-spell-type");
       const rankSelect = html.find("#pf2e-general-store-spell-rank");
       const updateRankOptions = (type) => {
@@ -2041,7 +2114,7 @@ async function openShopDialog(actor) {
     actorTokenSrc,
     actorGold,
     partyGold,
-    logoSrc: systemLogo,
+    logoSrc: (getStoreLogoPath() || systemLogo),
     logoAlt,
   });
 
@@ -3316,7 +3389,15 @@ Hooks.once("init", () => {
     type: String,
     default: "",
   });
-  invalidateCompendiumCaches();
+  
+  game.settings.register(MODULE_ID, STORE_LOGO_SETTING, {
+    name: "General Store: Shop-Logo",
+    scope: "world",
+    config: false,
+    type: String,
+    default: "",
+  });
+invalidateCompendiumCaches();
   registerPF2eGeneralStore();
 });
 

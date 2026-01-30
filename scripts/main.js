@@ -1832,7 +1832,7 @@ function openSpellConsumableSelectionDialog(spell) {
       },
     });
 
-    d// WICHTIG: Hook VOR render() registrieren, sonst wird er oft verpasst
+    // WICHTIG: Hook VOR render() registrieren, sonst wird er oft verpasst
 const hookId = Hooks.on("renderDialog", (app, html) => {
   if (app !== dialog) return;
   Hooks.off("renderDialog", hookId);

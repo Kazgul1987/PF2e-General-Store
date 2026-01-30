@@ -10,6 +10,7 @@ const WISHLIST_CLIENT_SETTING = "wishlistStateClient";
 const STORE_DEFINITIONS_SETTING = "storeDefinitions";
 const ACTIVE_STORE_SETTING = "activeStoreId";
 const ACTIVE_STORE_SCENE_FLAG = "activeStoreId";
+const STORE_LOGO_SETTING = "storeLogoSrc";
 const SELL_LOOT_FLAG_SCOPE = "world";
 const SELL_LOOT_FLAG_KEY = "sellLootActorId";
 const PACK_INDEX_CACHE = new Map();
@@ -804,6 +805,30 @@ function formatActiveStoreLabel(store) {
   return kind ? `${name} (${kind})` : name;
 }
 
+
+function getStoreLogoSrc() {
+  const configured = game.settings?.get(MODULE_ID, STORE_LOGO_SETTING);
+  if (typeof configured === "string" && configured.trim().length) {
+    return configured.trim();
+  }
+  return null;
+}
+
+function getSystemLogoSrc() {
+  return (
+    game.system?.logo ??
+    game.system?.data?.logo ??
+    game.system?.data?.media?.logo ??
+    game.system?.data?.media?.icon ??
+    null
+  );
+}
+
+function getSystemLogoAlt() {
+  return game.system?.title ? `${game.system.title} Logo` : "System-Logo";
+}
+
+
 function getEffectiveShopFilters() {
   const store = getActiveStore();
   if (store?.filters) return normalizeGmFilters(store.filters);
@@ -996,6 +1021,10 @@ function refreshOpenStoreDialogs() {
   }
   const filters = getEffectiveShopFilters();
   const storeLabel = formatActiveStoreLabel(getActiveStore());
+  const systemLogo = getSystemLogoSrc();
+  const logoAlt = getSystemLogoAlt();
+  const configuredLogo = getStoreLogoSrc();
+  const logoSrc = configuredLogo ?? systemLogo;
   activeDialogs.forEach((dialog) => {
     const searchInput = dialog.querySelector('input[name="store-search"]');
     const resultsList = dialog.querySelector(".store-results ul");
@@ -1004,6 +1033,34 @@ function refreshOpenStoreDialogs() {
     }
     const labelTarget = dialog.querySelector("[data-active-store-label]");
     if (labelTarget) labelTarget.textContent = storeLabel;
+
+    const logoContainer = dialog.querySelector(".store-logo");
+    if (logoContainer) {
+      const img = logoContainer.querySelector("img.store-logo__image");
+      const placeholder = logoContainer.querySelector(".store-logo__placeholder");
+      if (logoSrc) {
+        if (img) {
+          img.src = logoSrc;
+          img.alt = logoAlt;
+        } else {
+          if (placeholder) placeholder.remove();
+          const newImg = document.createElement("img");
+          newImg.className = "store-logo__image";
+          newImg.src = logoSrc;
+          newImg.alt = logoAlt;
+          logoContainer.appendChild(newImg);
+        }
+      } else {
+        if (img) img.remove();
+        if (!placeholder) {
+          const span = document.createElement("span");
+          span.className = "store-logo__placeholder";
+          span.textContent = "Logo";
+          logoContainer.appendChild(span);
+        }
+      }
+    }
+
     void updateSearchResults(searchInput.value ?? "", $(resultsList), filters);
   });
 }
@@ -1328,6 +1385,13 @@ function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) 
       title: "Kauf bestätigen",
       content,
       buttons: {
+        manageStores: {
+          label: "Settlements/NPCs",
+          callback: () => {
+            void openStoreManager();
+            return true;
+          },
+        },
         buy: {
           label: "Kaufen",
           callback: (html) => {
@@ -1829,6 +1893,40 @@ function openSpellConsumableSelectionDialog(spell) {
       if (app !== dialog) {
         return;
       }
+
+    const logoContainer = html.find(".store-logo");
+    if (logoContainer.length && game.user?.isGM) {
+      logoContainer.attr(
+        "title",
+        "Logo klicken zum Ändern. Shift+Klick: Zurücksetzen."
+      );
+      logoContainer.addClass("store-logo--clickable");
+      logoContainer.on("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void (async () => {
+          if (event.shiftKey) {
+            await game.settings.set(MODULE_ID, STORE_LOGO_SETTING, "");
+            refreshOpenStoreDialogs();
+            ui.notifications.info("Shop-Logo zurückgesetzt.");
+            return;
+          }
+
+          const current = getStoreLogoSrc() ?? getSystemLogoSrc() ?? "";
+          const picker = new FilePicker({
+            type: "image",
+            current,
+            callback: async (path) => {
+              await game.settings.set(MODULE_ID, STORE_LOGO_SETTING, path);
+              refreshOpenStoreDialogs();
+              ui.notifications.info("Shop-Logo aktualisiert.");
+            },
+          });
+          picker.render(true);
+        })();
+      });
+    }
+
       const typeSelect = html.find("#pf2e-general-store-spell-type");
       const rankSelect = html.find("#pf2e-general-store-spell-rank");
       const updateRankOptions = (type) => {
@@ -2032,16 +2130,16 @@ async function openShopDialog(actor) {
     game.system?.data?.media?.logo ??
     game.system?.data?.media?.icon ??
     null;
-  const logoAlt = game.system?.title
-    ? `${game.system.title} Logo`
-    : "System-Logo";
+  const logoAlt = getSystemLogoAlt();
+  const configuredLogo = getStoreLogoSrc();
+  const logoSrc = configuredLogo ?? systemLogo;
   const activeStoreLabel = formatActiveStoreLabel(getActiveStore());
   const content = await renderTemplate(SHOP_DIALOG_TEMPLATE, { activeStoreLabel,
     actorName,
     actorTokenSrc,
     actorGold,
     partyGold,
-    logoSrc: systemLogo,
+    logoSrc,
     logoAlt,
   });
 
@@ -3068,13 +3166,6 @@ function openGmMenu() {
       title: "General Store (GM)",
       content: htmlContent,
       buttons: {
-        manageStores: {
-  label: "Settlements/NPCs",
-  callback: () => {
-    void openStoreManager();
-    return true;
-  },
-},
         save: {
           label: "Filter speichern",
           callback: (html) => {
@@ -3311,6 +3402,15 @@ Hooks.once("init", () => {
 
   game.settings.register(MODULE_ID, ACTIVE_STORE_SETTING, {
     name: "General Store: Aktiver Shop (Fallback)",
+    scope: "world",
+    config: false,
+    type: String,
+    default: "",
+  });
+
+  game.settings.register(MODULE_ID, STORE_LOGO_SETTING, {
+    name: "General Store: Shop-Logo",
+    hint: "Bildpfad für das Logo im Einkaufsmenü (GM klickt auf das Logo zum Ändern).",
     scope: "world",
     config: false,
     type: String,

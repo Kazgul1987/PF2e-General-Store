@@ -1832,98 +1832,100 @@ function openSpellConsumableSelectionDialog(spell) {
       },
     });
 
-    // WICHTIG: Hook VOR render() registrieren, sonst wird er oft verpasst
-const hookId = Hooks.on("renderDialog", (app, html) => {
-  if (app !== dialog) return;
-  Hooks.off("renderDialog", hookId);
+    dialog.render(true);
 
-  // Shop-Logo auswählen (nur GM): Klick öffnet FilePicker, Shift+Klick setzt zurück
-  const logoContainer = html.find(".store-logo");
-  if (logoContainer.length && game.user?.isGM) {
-    logoContainer.addClass("store-logo--clickable");
-    logoContainer.attr(
-      "title",
-      "Klick: Logo wählen • Shift+Klick: Logo zurücksetzen"
-    );
-
-    logoContainer.off("click.pf2eGeneralStoreLogo");
-    logoContainer.on("click.pf2eGeneralStoreLogo", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-
-      if (event.shiftKey) {
-        void (async () => {
-          await game.settings.set(MODULE_ID, SHOP_LOGO_SETTING, "");
-          ui.notifications.info("Shop-Logo zurückgesetzt.");
-          refreshOpenStoreDialogs();
-        })();
+    Hooks.once("renderDialog", (app, html) => {
+      if (app !== dialog) {
         return;
       }
 
-      const FP =
-        globalThis.FilePicker ?? foundry?.applications?.apps?.FilePicker ?? null;
 
-      if (!FP) {
-        ui.notifications.error("FilePicker ist nicht verfügbar.");
-        return;
-      }
+    // Shop-Logo auswählen (nur GM): Klick öffnet FilePicker, Shift+Klick setzt zurück
+    const logoContainer = html.find(".store-logo");
+    if (logoContainer.length && game.user?.isGM) {
+      logoContainer.addClass("store-logo--clickable");
+      logoContainer.attr(
+        "title",
+        "Klick: Logo wählen • Shift+Klick: Logo zurücksetzen"
+      );
 
-      const current = getCurrentShopLogo("");
-      const picker = new FP({
-        type: "image",
-        current,
-        callback: (path) => {
+      logoContainer.off("click.pf2eGeneralStoreLogo");
+      logoContainer.on("click.pf2eGeneralStoreLogo", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (event.shiftKey) {
           void (async () => {
-            const value = typeof path === "string" ? path : "";
-            await game.settings.set(MODULE_ID, SHOP_LOGO_SETTING, value);
-            ui.notifications.info("Shop-Logo gespeichert.");
+            await game.settings.set(MODULE_ID, SHOP_LOGO_SETTING, "");
+            ui.notifications.info("Shop-Logo zurückgesetzt.");
             refreshOpenStoreDialogs();
           })();
-        },
-      });
-
-      try {
-        picker.render(true);
-      } catch (err) {
-        console.error(`${MODULE_ID} | FilePicker render failed`, err);
-        try {
-          picker.browse();
-        } catch (err2) {
-          console.error(`${MODULE_ID} | FilePicker browse failed`, err2);
-          ui.notifications.error("Konnte FilePicker nicht öffnen. Siehe Konsole.");
+          return;
         }
-      }
-    });
-  }
 
-  // --- Rest deines bestehenden renderDialog-Codes bleibt wie gehabt ---
-  const typeSelect = html.find("#pf2e-general-store-spell-type");
-  const rankSelect = html.find("#pf2e-general-store-spell-rank");
+        const FP =
+          globalThis.FilePicker ?? foundry?.applications?.apps?.FilePicker ?? null;
 
-  const updateRankOptions = (type) => {
-    const availableRanks = getSpellConsumableRanks(type);
-    const selectedRank = getDefaultSpellConsumableRank(spell, type);
-    rankSelect.empty();
-    if (!availableRanks.length) {
-      rankSelect.append(`<option value="">Keine Ränge verfügbar</option>`);
-      return;
+        if (!FP) {
+          ui.notifications.error("FilePicker ist nicht verfügbar.");
+          return;
+        }
+
+        const current = getCurrentShopLogo("");
+        const picker = new FP({
+          type: "image",
+          current,
+          callback: (path) => {
+            void (async () => {
+              const value = typeof path === "string" ? path : "";
+              await game.settings.set(MODULE_ID, SHOP_LOGO_SETTING, value);
+              ui.notifications.info("Shop-Logo gespeichert.");
+              refreshOpenStoreDialogs();
+            })();
+          },
+        });
+
+        try {
+          picker.render(true);
+        } catch (err) {
+          console.error(`${MODULE_ID} | FilePicker render failed`, err);
+          try {
+            picker.browse();
+          } catch (err2) {
+            console.error(`${MODULE_ID} | FilePicker browse failed`, err2);
+            ui.notifications.error("Konnte FilePicker nicht öffnen. Siehe Konsole.");
+          }
+        }
+      });
     }
-
-    availableRanks.forEach((rank) => {
-      const option = document.createElement("option");
-      option.value = String(rank);
-      option.textContent = `Rang ${rank}`;
-      if (rank === selectedRank) option.selected = true;
-      rankSelect.append(option);
+      const typeSelect = html.find("#pf2e-general-store-spell-type");
+      const rankSelect = html.find("#pf2e-general-store-spell-rank");
+      const updateRankOptions = (type) => {
+        const availableRanks = getSpellConsumableRanks(type);
+        const selectedRank = getDefaultSpellConsumableRank(spell, type);
+        rankSelect.empty();
+        if (!availableRanks.length) {
+          rankSelect.append(
+            `<option value="">Keine Ränge verfügbar</option>`
+          );
+          return;
+        }
+        availableRanks.forEach((rank) => {
+          const option = document.createElement("option");
+          option.value = String(rank);
+          option.textContent = `Rang ${rank}`;
+          if (rank === selectedRank) {
+            option.selected = true;
+          }
+          rankSelect.append(option);
+        });
+      };
+      typeSelect.on("change", (event) => {
+        updateRankOptions(event.target.value);
+      });
     });
-  };
-
-  typeSelect.on("change", (event) => {
-    updateRankOptions(event.target.value);
   });
-});
-
-dialog.render(true);
+}
 
 function getSpellcastingItemConfig(type, rank) {
   const spellcastingItems = CONFIG?.PF2E?.spellcastingItems ?? {};

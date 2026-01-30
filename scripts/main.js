@@ -3,12 +3,11 @@ const SHOP_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/shop-dialog.hbs`;
 const GM_FILTERS_TEMPLATE = `modules/${MODULE_ID}/templates/gm-filters.hbs`;
 const WISHLIST_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/wishlist-dialog.hbs`;
 const STORE_MANAGER_TEMPLATE = `modules/${MODULE_ID}/templates/store-manager.hbs`;
-
-const STORE_LOGO_SETTING = "storeLogoPath";
 const GM_FILTERS_SETTING = "gmFilters";
 const SHOW_STORE_BUTTON_SETTING = "showStoreButtonForPlayers";
 const WISHLIST_SETTING = "wishlistState";
 const WISHLIST_CLIENT_SETTING = "wishlistStateClient";
+const SHOP_LOGO_SETTING = "shopLogo";
 const STORE_DEFINITIONS_SETTING = "storeDefinitions";
 const ACTIVE_STORE_SETTING = "activeStoreId";
 const ACTIVE_STORE_SCENE_FLAG = "activeStoreId";
@@ -761,6 +760,13 @@ async function setCurrentGmFilters(filters) {
   refreshOpenStoreDialogs();
 }
 
+
+function getCurrentShopLogo(fallback = "") {
+  const configured = game.settings?.get(MODULE_ID, SHOP_LOGO_SETTING) ?? "";
+  const value = typeof configured === "string" ? configured.trim() : "";
+  return value || fallback || "";
+}
+
 function getStoreDefinitions() {
   return game.settings?.get(MODULE_ID, STORE_DEFINITIONS_SETTING) ?? {};
 }
@@ -828,44 +834,6 @@ function escapeHtmlSafe(value) {
     return str;
   }
 }
-
-
-function getStoreLogoPath() {
-  const value = game.settings?.get(MODULE_ID, STORE_LOGO_SETTING);
-  return typeof value === "string" && value.trim().length ? value.trim() : "";
-}
-
-async function setStoreLogoPath(path) {
-  const value = typeof path === "string" ? path.trim() : "";
-  await game.settings.set(MODULE_ID, STORE_LOGO_SETTING, value);
-  game.socket?.emit(`module.${MODULE_ID}`, { type: "storeLogoUpdate", path: value });
-  refreshOpenStoreDialogs();
-}
-
-function updateLogoElement($dialogRoot, logoSrc, logoAlt) {
-  const container = $dialogRoot.find(".store-logo").first();
-  if (!container.length) return;
-
-  const src = typeof logoSrc === "string" && logoSrc.length ? logoSrc : "";
-  const alt = typeof logoAlt === "string" && logoAlt.length ? logoAlt : "Logo";
-
-  const img = container.find("img.store-logo__image");
-  const placeholder = container.find(".store-logo__placeholder");
-
-  if (src) {
-    if (img.length) {
-      img.attr("src", src);
-      img.attr("alt", alt);
-    } else {
-      placeholder.remove();
-      container.html(`<img class="store-logo__image" src="${escapeHtmlSafe(src)}" alt="${escapeHtmlSafe(alt)}" />`);
-    }
-  } else {
-    if (img.length) img.remove();
-    if (!placeholder.length) container.html(`<span class="store-logo__placeholder">Logo</span>`);
-  }
-}
-
 
 function isLegacyItem(entry) {
   const legacyFlag = entry?.flags?.pf2e?.legacy;
@@ -1036,10 +1004,8 @@ function refreshOpenStoreDialogs() {
   }
   const filters = getEffectiveShopFilters();
   const storeLabel = formatActiveStoreLabel(getActiveStore());
-    const customLogo = getStoreLogoPath();
-  const systemLogo = game.system?.logo ?? game.system?.data?.logo ?? game.system?.data?.media?.logo ?? game.system?.data?.media?.icon ?? "";
-  const logoAlt = game.system?.title ? `${game.system.title} Logo` : "System-Logo";
-activeDialogs.forEach((dialog) => {
+  const logoSrc = getCurrentShopLogo("");
+  activeDialogs.forEach((dialog) => {
     const searchInput = dialog.querySelector('input[name="store-search"]');
     const resultsList = dialog.querySelector(".store-results ul");
     if (!searchInput || !resultsList) {
@@ -1869,39 +1835,69 @@ function openSpellConsumableSelectionDialog(spell) {
     dialog.render(true);
 
     Hooks.once("renderDialog", (app, html) => {
-    if (app !== dialog) {
-      return;
-    }
+      if (app !== dialog) {
+        return;
+      }
 
-    const $root = html.find(".pf2e-general-store-dialog").first();
-    $root.attr("data-system-logo-src", systemLogo ?? "");
 
-    // Logo picker (GM): click logo opens FilePicker, Shift+click resets to system logo
-    if (game.user?.isGM) {
-      html.on("click", ".store-logo", async (event) => {
+    // Shop-Logo auswählen (nur GM): Klick öffnet FilePicker, Shift+Klick setzt zurück
+    const logoContainer = html.find(".store-logo");
+    if (logoContainer.length && game.user?.isGM) {
+      logoContainer.addClass("store-logo--clickable");
+      logoContainer.attr(
+        "title",
+        "Klick: Logo wählen • Shift+Klick: Logo zurücksetzen"
+      );
+
+      logoContainer.off("click.pf2eGeneralStoreLogo");
+      logoContainer.on("click.pf2eGeneralStoreLogo", (event) => {
         event.preventDefault();
+        event.stopPropagation();
 
         if (event.shiftKey) {
-          await setStoreLogoPath("");
-          const fallback = $root.attr("data-system-logo-src") || "";
-          const resolved = fallback || "";
-          updateLogoElement($root, resolved, logoAlt);
+          void (async () => {
+            await game.settings.set(MODULE_ID, SHOP_LOGO_SETTING, "");
+            ui.notifications.info("Shop-Logo zurückgesetzt.");
+            refreshOpenStoreDialogs();
+          })();
           return;
         }
 
-        const current = getStoreLogoPath() || ($root.attr("data-system-logo-src") || "");
-        const picker = new FilePicker({
+        const FP =
+          globalThis.FilePicker ?? foundry?.applications?.apps?.FilePicker ?? null;
+
+        if (!FP) {
+          ui.notifications.error("FilePicker ist nicht verfügbar.");
+          return;
+        }
+
+        const current = getCurrentShopLogo("");
+        const picker = new FP({
           type: "image",
           current,
-          callback: async (path) => {
-            await setStoreLogoPath(path);
-            updateLogoElement($root, path || ($root.attr("data-system-logo-src") || ""), logoAlt);
+          callback: (path) => {
+            void (async () => {
+              const value = typeof path === "string" ? path : "";
+              await game.settings.set(MODULE_ID, SHOP_LOGO_SETTING, value);
+              ui.notifications.info("Shop-Logo gespeichert.");
+              refreshOpenStoreDialogs();
+            })();
           },
         });
-        picker.render(true);
+
+        try {
+          picker.render(true);
+        } catch (err) {
+          console.error(`${MODULE_ID} | FilePicker render failed`, err);
+          try {
+            picker.browse();
+          } catch (err2) {
+            console.error(`${MODULE_ID} | FilePicker browse failed`, err2);
+            ui.notifications.error("Konnte FilePicker nicht öffnen. Siehe Konsole.");
+          }
+        }
       });
     }
-
       const typeSelect = html.find("#pf2e-general-store-spell-type");
       const rankSelect = html.find("#pf2e-general-store-spell-rank");
       const updateRankOptions = (type) => {
@@ -2114,7 +2110,7 @@ async function openShopDialog(actor) {
     actorTokenSrc,
     actorGold,
     partyGold,
-    logoSrc: (getStoreLogoPath() || systemLogo),
+    logoSrc: getCurrentShopLogo(systemLogo),
     logoAlt,
   });
 
@@ -3142,12 +3138,12 @@ function openGmMenu() {
       content: htmlContent,
       buttons: {
         manageStores: {
-  label: "Settlements/NPCs",
-  callback: () => {
-    void openStoreManager();
-    return true;
-  },
-},
+          label: "Settlements/NPCs",
+          callback: () => {
+            void openStoreManager();
+            return true;
+          },
+        },
         save: {
           label: "Filter speichern",
           callback: (html) => {
@@ -3374,6 +3370,14 @@ Hooks.once("init", () => {
     default: DEFAULT_WISHLIST_STATE,
   });
 
+  game.settings.register(MODULE_ID, SHOP_LOGO_SETTING, {
+    name: "General Store: Shop-Logo",
+    scope: "world",
+    config: false,
+    type: String,
+    default: "",
+  });
+
   game.settings.register(MODULE_ID, STORE_DEFINITIONS_SETTING, {
     name: "General Store: Shop-Definitionen (Settlements/NPCs)",
     scope: "world",
@@ -3389,15 +3393,7 @@ Hooks.once("init", () => {
     type: String,
     default: "",
   });
-  
-  game.settings.register(MODULE_ID, STORE_LOGO_SETTING, {
-    name: "General Store: Shop-Logo",
-    scope: "world",
-    config: false,
-    type: String,
-    default: "",
-  });
-invalidateCompendiumCaches();
+  invalidateCompendiumCaches();
   registerPF2eGeneralStore();
 });
 

@@ -611,7 +611,10 @@
 }
 
 
-/* Logo picker */
-.store-logo { cursor: pointer; }
-.store-logo:hover { filter: brightness(1.05); }
-.store-logo:active { filter: brightness(0.95); }
+.store-logo--clickable {
+  cursor: pointer;
+}
+
+.store-logo--clickable:hover {
+  filter: brightness(1.05);
+}

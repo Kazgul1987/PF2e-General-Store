@@ -3192,6 +3192,43 @@ async function openStoreManager() {
     });
   });
 }
+
+async function openGlobalWishlistDialog() {
+  const wishlistState = getWorldWishlistState();
+  const partyActor = getPartyStashActor();
+  const { currency: partyCurrency } = getActorCurrency(partyActor);
+  const hasPartyCurrency = partyActor && hasCurrencyValues(partyCurrency);
+  const partyAvailability = hasPartyCurrency
+    ? formatCurrencyInGold(partyCurrency) ?? "Nicht verfügbar"
+    : "Nicht verfügbar";
+  const items = buildWishlistDialogItems(wishlistState, "");
+  const wishlistTotal = calculateWishlistTotal(wishlistState);
+  const totalValue = `${formatGold(wishlistTotal)} gp`;
+  const remainingValue = hasPartyCurrency
+    ? `${formatGold(getCurrencyInCopper(partyCurrency) / 100 - wishlistTotal)} gp`
+    : "Nicht verfügbar";
+  const content = await renderTemplate(WISHLIST_DIALOG_TEMPLATE, {
+    items,
+    partyGold: partyAvailability,
+    totalValue,
+    remainingValue,
+  });
+
+  const dialog = new Dialog({
+    title: "Globale Wunschliste",
+    content,
+    buttons: {
+      close: {
+        label: "Schließen",
+      },
+    },
+    width: 640,
+    height: 520,
+  });
+
+  dialog.render(true);
+}
+
 function openGmMenu() {
   const filters = getCurrentGmFilters();
   const content = renderTemplate(GM_FILTERS_TEMPLATE, {
@@ -3216,6 +3253,13 @@ function openGmMenu() {
           label: "Settlements/NPCs",
           callback: () => {
             void openStoreManager();
+            return true;
+          },
+        },
+        wishlist: {
+          label: "Globale Wunschliste",
+          callback: () => {
+            void openGlobalWishlistDialog();
             return true;
           },
         },

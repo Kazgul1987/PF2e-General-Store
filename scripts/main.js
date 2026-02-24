@@ -2114,6 +2114,11 @@ async function openShopDialog(actor) {
     logoAlt,
   });
 
+  const dialogWidth = Math.min(
+    1800,
+    Math.max(960, Math.floor(window.innerWidth * 0.95))
+  );
+
   const dialog = new Dialog(
     {
       title: "General Store",
@@ -2126,7 +2131,7 @@ async function openShopDialog(actor) {
       default: "close",
     },
     {
-      width: 720,
+      width: dialogWidth,
       height: 650,
       resizable: true,
     }
@@ -2138,6 +2143,8 @@ async function openShopDialog(actor) {
     if (app !== dialog) {
       return;
     }
+
+    html.closest(".app.window-app.dialog").addClass("pf2e-general-store-window");
 
     // Shop-Logo auswählen (nur GM): Klick öffnet FilePicker, Shift+Klick setzt zurück
     const logoContainer = html.find(".store-logo");

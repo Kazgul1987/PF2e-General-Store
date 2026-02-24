@@ -633,3 +633,9 @@
 .store-logo--clickable:hover {
   filter: brightness(1.05);
 }
+
+
+.app.window-app.dialog.pf2e-general-store-window {
+  max-width: min(1800px, 98vw);
+  width: min(1800px, 98vw);
+}

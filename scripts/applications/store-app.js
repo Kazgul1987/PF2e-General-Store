@@ -1,4 +1,4 @@
-import { rejectWishlistRequest, validateWishlistRequest } from "../wishlist/socket.js";
+import { contributorFromUser, rejectWishlistRequest, validateWishlistRequest } from "../wishlist/socket.js";
 import { purchaseItem } from "../pf2e/purchases.js";
 import { pay, copperToCoins } from "../pf2e/currency.js";
 import { quoteSale, sellItems } from "../pf2e/sales.js";
@@ -6,29 +6,10 @@ import { getItemDescription, getItemIndex, hasItemIndex } from "../data/compendi
 import { getActiveStore, getActiveStoreId, getStoreDefinitions, setActiveStoreId, setStoreDefinitions } from "../data/stores.js";
 import { addWishlistItem, moveWishlistItemToCart, moveWishlistPlayerToCart, normalizeWishlistState, removePlayerFromWishlist, removeWishlistItem, removeWishlistQuantity, setWishlistItemQuantity, wishlistTotal } from "../wishlist/model.js";
 import { createSpellConsumableSource, getDefaultSpellConsumableRank, getDefaultSpellConsumableType, getSpellConsumablePrice, getSpellConsumableRanks } from "../pf2e/spell-consumables.js";
-const MODULE_ID = "pf2e-general-store";
-const SHOP_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/shop-dialog.hbs`;
-const GM_FILTERS_TEMPLATE = `modules/${MODULE_ID}/templates/gm-filters.hbs`;
-const WISHLIST_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/wishlist-dialog.hbs`;
-const STORE_MANAGER_TEMPLATE = `modules/${MODULE_ID}/templates/store-manager.hbs`;
-const GM_FILTERS_SETTING = "gmFilters";
-const SHOW_STORE_BUTTON_SETTING = "showStoreButtonForPlayers";
-const WISHLIST_SETTING = "wishlistState";
-const WISHLIST_CLIENT_SETTING = "wishlistStateClient";
-const SHOP_LOGO_SETTING = "shopLogo";
+import { DEFAULT_GM_FILTERS, DEFAULT_WISHLIST_STATE, FLAGS, MODULE_ID, SETTINGS, SOCKET_TYPES, TEMPLATES } from "../constants.js";
 const SELL_LOOT_FLAG_SCOPE = "world";
-const SELL_LOOT_FLAG_KEY = "sellLootActorId";
 const DEFAULT_DESCRIPTION_PLACEHOLDER =
   '<p class="store-description__placeholder">Wähle ein Item aus, um die Beschreibung zu sehen.</p>';
-const DEFAULT_GM_FILTERS = {
-  traits: [],
-  minLevel: null,
-  maxLevel: null,
-  rarity: null,
-};
-const DEFAULT_WISHLIST_STATE = {
-  items: {},
-};
 let currentGmFilters = { ...DEFAULT_GM_FILTERS };
 let currentWishlistState = { ...DEFAULT_WISHLIST_STATE };
 let currentPlayerWishlistState = { ...DEFAULT_WISHLIST_STATE };
@@ -190,13 +171,13 @@ function isWishlistEmpty(state) {
 
 function getWorldWishlistState() {
   return normalizeWishlistState(
-    game.settings?.get(MODULE_ID, WISHLIST_SETTING) ?? currentWishlistState
+    game.settings?.get(MODULE_ID, SETTINGS.WISHLIST) ?? currentWishlistState
   );
 }
 
 function getPlayerWishlistState() {
   return normalizeWishlistState(
-    game.settings?.get(MODULE_ID, WISHLIST_CLIENT_SETTING) ?? currentPlayerWishlistState
+    game.settings?.get(MODULE_ID, SETTINGS.WISHLIST_CLIENT) ?? currentPlayerWishlistState
   );
 }
 
@@ -210,9 +191,9 @@ function getWishlistState() {
 async function setWorldWishlistState(state) {
   const normalized = normalizeWishlistState(state);
   currentWishlistState = normalized;
-  await game.settings.set(MODULE_ID, WISHLIST_SETTING, normalized);
+  await game.settings.set(MODULE_ID, SETTINGS.WISHLIST, normalized);
   game.socket?.emit(`module.${MODULE_ID}`, {
-    type: "wishlistUpdate",
+    type: SOCKET_TYPES.WISHLIST_UPDATE,
     state: normalized,
     total: wishlistTotal(normalized),
   });
@@ -222,7 +203,7 @@ async function setWorldWishlistState(state) {
 async function setPlayerWishlistState(state) {
   const normalized = normalizeWishlistState(state);
   currentPlayerWishlistState = normalized;
-  await game.settings.set(MODULE_ID, WISHLIST_CLIENT_SETTING, normalized);
+  await game.settings.set(MODULE_ID, SETTINGS.WISHLIST_CLIENT, normalized);
   return normalized;
 }
 
@@ -298,11 +279,12 @@ function requestWishlistMutation(type, args) {
   let payload = null;
   if (type === "addItem") {
     const [item, player] = args;
-    payload = { type: "wishlist:add", requestId, packId: item?.pack, itemId: item?.itemId,
-      quantity: Number(item?.quantity) };
+    payload = { type: SOCKET_TYPES.WISHLIST_ADD, requestId, userId: game.user?.id,
+      packId: item?.pack, itemId: item?.itemId, quantity: Number(item?.quantity) };
   } else if (type === "removePlayerFromWishlist") {
     const [itemKey, _contributorId, quantity] = args;
-    payload = { type: "wishlist:remove", requestId, itemKey, quantity: Number(quantity) };
+    payload = { type: SOCKET_TYPES.WISHLIST_REMOVE_OWN, requestId, userId: game.user?.id,
+      itemKey, quantity: Number(quantity) };
   }
   if (!payload) return Promise.resolve(null);
   return new Promise((resolve) => {
@@ -369,14 +351,14 @@ function formatTraitsInput(traits) {
 
 function getCurrentGmFilters() {
   return normalizeGmFilters(
-    game.settings?.get(MODULE_ID, GM_FILTERS_SETTING) ?? currentGmFilters
+    game.settings?.get(MODULE_ID, SETTINGS.GM_FILTERS) ?? currentGmFilters
   );
 }
 
 async function setCurrentGmFilters(filters) {
   const normalized = normalizeGmFilters(filters);
   currentGmFilters = normalized;
-  await game.settings.set(MODULE_ID, GM_FILTERS_SETTING, normalized);
+  await game.settings.set(MODULE_ID, SETTINGS.GM_FILTERS, normalized);
   game.socket?.emit(`module.${MODULE_ID}`, {
     type: "gmFiltersUpdate",
     filters: normalized,
@@ -386,7 +368,7 @@ async function setCurrentGmFilters(filters) {
 
 
 function getCurrentShopLogo(fallback = "") {
-  const configured = game.settings?.get(MODULE_ID, SHOP_LOGO_SETTING) ?? "";
+  const configured = game.settings?.get(MODULE_ID, SETTINGS.SHOP_LOGO) ?? "";
   const value = typeof configured === "string" ? configured.trim() : "";
   return value || fallback || "";
 }
@@ -1544,7 +1526,7 @@ async function openShopDialog(actor) {
     ? `${game.system.title} Logo`
     : "System-Logo";
   const activeStoreLabel = formatActiveStoreLabel(getActiveStore());
-  const content = await renderTemplate(SHOP_DIALOG_TEMPLATE, { activeStoreLabel,
+  const content = await renderTemplate(TEMPLATES.SHOP, { activeStoreLabel,
     actorName,
     actorTokenSrc,
     actorGold,
@@ -1601,7 +1583,7 @@ async function openShopDialog(actor) {
 
         if (event.shiftKey) {
           void (async () => {
-            await game.settings.set(MODULE_ID, SHOP_LOGO_SETTING, "");
+            await game.settings.set(MODULE_ID, SETTINGS.SHOP_LOGO, "");
             ui.notifications.info("Shop-Logo zurückgesetzt.");
             refreshOpenStoreDialogs();
           })();
@@ -1623,7 +1605,7 @@ async function openShopDialog(actor) {
           callback: (path) => {
             void (async () => {
               const value = typeof path === "string" ? path : "";
-              await game.settings.set(MODULE_ID, SHOP_LOGO_SETTING, value);
+              await game.settings.set(MODULE_ID, SETTINGS.SHOP_LOGO, value);
               ui.notifications.info("Shop-Logo gespeichert.");
               refreshOpenStoreDialogs();
             })();
@@ -1904,7 +1886,7 @@ async function openShopDialog(actor) {
       const remainingValue = hasPartyCurrency
         ? `${formatGold(getCurrencyInCopper(partyCurrency) / 100 - wishlistTotalValue)} gp`
         : "Nicht verfügbar";
-      const content = await renderTemplate(WISHLIST_DIALOG_TEMPLATE, {
+      const content = await renderTemplate(TEMPLATES.WISHLIST, {
         items,
         partyGold: partyAvailability,
         totalValue,
@@ -2118,7 +2100,7 @@ async function resolveSellLootActor() {
 
   let lootActor = controlledLoot;
   if (!lootActor) {
-    const savedId = game.user.getFlag(SELL_LOOT_FLAG_SCOPE, SELL_LOOT_FLAG_KEY);
+    const savedId = game.user.getFlag(SELL_LOOT_FLAG_SCOPE, FLAGS.SELL_LOOT_ACTOR);
     lootActor = lootActors.find((actor) => actor.id === savedId) ?? null;
   }
 
@@ -2128,7 +2110,7 @@ async function resolveSellLootActor() {
 
   if (!lootActor) return null;
 
-  await game.user.setFlag(SELL_LOOT_FLAG_SCOPE, SELL_LOOT_FLAG_KEY, lootActor.id);
+  await game.user.setFlag(SELL_LOOT_FLAG_SCOPE, FLAGS.SELL_LOOT_ACTOR, lootActor.id);
   return lootActor;
 }
 
@@ -2480,7 +2462,7 @@ async function openStoreManager() {
     }))
     .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "", game.i18n?.lang ?? "de"));
 
-  const content = await renderTemplate(STORE_MANAGER_TEMPLATE, {
+  const content = await renderTemplate(TEMPLATES.STORE_MANAGER, {
     stores,
     activeId,
     hasScene: Boolean(canvas?.scene),
@@ -2658,7 +2640,7 @@ async function openGlobalWishlistDialog() {
   const remainingValue = hasPartyCurrency
     ? `${formatGold(getCurrencyInCopper(partyCurrency) / 100 - wishlistTotalValue)} gp`
     : "Nicht verfügbar";
-  const content = await renderTemplate(WISHLIST_DIALOG_TEMPLATE, {
+  const content = await renderTemplate(TEMPLATES.WISHLIST, {
     items,
     partyGold: partyAvailability,
     totalValue,
@@ -2682,7 +2664,7 @@ async function openGlobalWishlistDialog() {
 
 function openGmMenu() {
   const filters = getCurrentGmFilters();
-  const content = renderTemplate(GM_FILTERS_TEMPLATE, {
+  const content = renderTemplate(TEMPLATES.GM_FILTERS, {
     traitsInput: formatTraitsInput(filters.traits),
     minLevel: Number.isFinite(filters.minLevel) ? filters.minLevel : "",
     maxLevel: Number.isFinite(filters.maxLevel) ? filters.maxLevel : "",
@@ -2767,7 +2749,7 @@ function openGmMenu() {
 }
 
 function addActorSheetHeaderControl(app, html) {
-  const allowPlayerButton = game.settings.get(MODULE_ID, SHOW_STORE_BUTTON_SETTING);
+  const allowPlayerButton = game.settings.get(MODULE_ID, SETTINGS.SHOW_STORE_BUTTON);
   const canShowButton = game.user?.isGM || (allowPlayerButton && app.actor?.isOwner);
   if (!canShowButton) {
     return;
@@ -2875,11 +2857,12 @@ Hooks.once("ready", () => {
       refreshOpenStoreDialogs();
       return;
     }
-    if (payload?.type === "wishlistUpdate") {
+    if (payload?.type === SOCKET_TYPES.WISHLIST_UPDATE) {
       currentWishlistState = normalizeWishlistState(payload.state ?? {});
+      if (!game.user?.isGM) void setPlayerWishlistState(currentWishlistState);
       return;
     }
-    if (payload?.type === "wishlist:result") {
+    if (payload?.type === SOCKET_TYPES.WISHLIST_RESULT) {
       const requestId = payload.requestId;
       if (!requestId || !pendingWishlistMutationRequests.has(requestId)) {
         return;
@@ -2892,23 +2875,29 @@ Hooks.once("ready", () => {
       pending?.resolve?.(payload.result ?? null);
       return;
     }
-    if (["wishlist:add", "wishlist:remove"].includes(payload?.type)) {
+    if ([SOCKET_TYPES.WISHLIST_ADD, SOCKET_TYPES.WISHLIST_REMOVE_OWN].includes(payload?.type)) {
       if (!game.user?.isGM) return;
       void (async () => {
         const validated = await validateWishlistRequest(payload);
         if (!validated) { rejectWishlistRequest(payload); return; }
         let result;
-        if (validated.type === "wishlist:add") {
+        if (validated.type === SOCKET_TYPES.WISHLIST_ADD) {
           const document = validated.item;
           const price = getPriceInGold(document);
           result = await applyWishlistMutationAsGm("addItem", {
             itemId: document.id, pack: validated.pack.collection, name: document.name,
             entryType: document.type === "spell" ? "spell" : "item", price, quantity: validated.quantity,
-          }, null);
+          }, { ...contributorFromUser(validated.user), quantity: validated.quantity });
         } else {
-          result = await applyWishlistMutationAsGm("removeQuantity", validated.itemKey, validated.quantity);
+          const current = getWorldWishlistState();
+          const contribution = current.items[validated.itemKey]?.players
+            ?.find((player) => player.userId === validated.user.id)?.quantity ?? 0;
+          if (validated.quantity > contribution) { rejectWishlistRequest(payload); return; }
+          result = await applyWishlistMutationAsGm(
+            "removePlayerFromWishlist", validated.itemKey, validated.user.id, validated.quantity,
+          );
         }
-        game.socket?.emit(`module.${MODULE_ID}`, { type: "wishlist:result", requestId: validated.requestId, result });
+        game.socket?.emit(`module.${MODULE_ID}`, { type: SOCKET_TYPES.WISHLIST_RESULT, requestId: validated.requestId, result });
       })().catch((error) => console.error(`[${MODULE_ID}] Wishlist socket request failed`, { requestId: payload.requestId, error }));
     }  });
 });

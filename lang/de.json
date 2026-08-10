@@ -31,7 +31,9 @@
       "InvalidSale": "Ungültige Verkaufsdaten.",
       "PriceChanged": "Der Preis hat sich geändert. Bitte prüfe den Warenkorb erneut.",
       "InsufficientFunds": "Nicht genug Gold für den Kauf.",
-      "PurchaseFailed": "Der Kauf ist fehlgeschlagen; eine mögliche Zahlung wurde zurückerstattet."
+      "PurchaseFailed": "Der Kauf ist fehlgeschlagen; eine mögliche Zahlung wurde zurückerstattet.",
+      "SaleItemRollbackFailed": "Der Verkauf konnte nicht vollständig rückgängig gemacht werden. Die Auszahlung bleibt erhalten, damit nicht sowohl Gegenstände als auch Bezahlung verloren gehen. Bitte prüfe das betroffene Inventar manuell.",
+      "SalePayoutRollbackFailed": "Die Gegenstände wurden wiederhergestellt, aber die Auszahlung konnte nicht zurückgenommen werden. Bitte prüfe Inventar und Währung manuell."
     },
     "Settings": {
       "ShowButton": {

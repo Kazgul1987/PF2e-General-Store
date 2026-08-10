@@ -21,8 +21,7 @@ export const SOCKET_TYPES = Object.freeze({
   ACTIVE_STORE_UPDATE: "store:active",
   WISHLIST_UPDATE: "wishlist:update",
   WISHLIST_ADD: "wishlist:add",
-  WISHLIST_REMOVE: "wishlist:remove",
-  WISHLIST_REMOVE_PLAYER: "wishlist:remove-player",
+  WISHLIST_REMOVE_OWN: "wishlist:remove-own",
   WISHLIST_RESULT: "wishlist:result",
 });
 

@@ -39,7 +39,8 @@ export async function sellItems({ sourceActor, payoutActor, selections, store = 
     (total, { item, quantity, available }) => total + baseSaleCopper(item) * (quantity / available), 0,
   ) * multiplier));
   const context = {
-    actorId: sourceActor.id, payoutActorId: payoutActor.id,
+    operation: "sellItems.rollback",
+    sourceActorId: sourceActor.id, payoutActorId: payoutActor.id,
     storeId: store?.id ?? "", payoutCopper,
     selections: resolved.map(({ item, quantity }) => ({ itemId: item.id, quantity })),
   };
@@ -53,6 +54,7 @@ export async function sellItems({ sourceActor, payoutActor, selections, store = 
     for (const { item, quantity, available } of partials) await item.update({ "system.quantity": available - quantity });
     return { ok: true, payoutCopper, itemCount: resolved.length };
   } catch (error) {
+    let itemRollbackSucceeded = false;
     try {
       const existingIds = new Set(Array.from(sourceActor.items ?? []).map((item) => item.id));
       const missing = snapshots.filter((source) => !existingIds.has(source._id));
@@ -60,15 +62,20 @@ export async function sellItems({ sourceActor, payoutActor, selections, store = 
       for (const source of snapshots.filter((entry) => existingIds.has(entry._id))) {
         await sourceActor.items.get(source._id)?.update({ "system.quantity": source.system?.quantity ?? 1 });
       }
+      itemRollbackSucceeded = true;
     } catch (itemRollbackError) {
       log.error("Sale item rollback failed; world state is inconsistent", { ...context, itemRollbackError });
-      if (game.user?.isGM) ui.notifications?.error("PF2e General Store: Sale item rollback failed; check actor inventory.");
+      ui.notifications?.error(game.i18n.localize("PF2EGeneralStore.Errors.SaleItemRollbackFailed"), { permanent: true });
     }
-    try {
-      if (!(await pay(payoutActor, payoutCopper))) throw new Error("Payout actor no longer has rollback funds");
-    } catch (rollbackError) {
-      log.error("Sale rollback failed; world state is inconsistent", { ...context, rollbackError });
-      if (game.user?.isGM) ui.notifications?.error("PF2e General Store: Sale rollback failed; check actor inventories and currency.");
+    // If inventory restoration failed, retain the payout as compensation. Never
+    // risk leaving the seller without both the sold items and their payment.
+    if (itemRollbackSucceeded) {
+      try {
+        if (!(await pay(payoutActor, payoutCopper))) throw new Error("Payout actor no longer has rollback funds");
+      } catch (rollbackError) {
+        log.error("Sale payout rollback failed; world state is inconsistent", { ...context, rollbackError });
+        ui.notifications?.error(game.i18n.localize("PF2EGeneralStore.Errors.SalePayoutRollbackFailed"), { permanent: true });
+      }
     }
     log.error("Sale failed", { ...context, error });
     throw error;

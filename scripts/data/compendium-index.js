@@ -43,7 +43,8 @@ export async function getItemDescription(packId, itemId) {
 }
 
 export function invalidatePack(packId) {
-  for (const key of packPromises.keys()) if (key.startsWith(`${packId}:`)) packPromises.delete(key);
+  // Aggregate indexes and descriptions may contain this pack, so preserve the
+  // established full-invalidation behavior without a redundant selective pass.
   invalidateAll();
 }
 

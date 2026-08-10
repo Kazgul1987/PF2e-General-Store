@@ -635,7 +635,7 @@
 }
 
 
-.app.window-app.dialog.pf2e-general-store-window {
+.pf2e-general-store-window {
   max-width: min(1800px, 98vw);
   width: min(1800px, 98vw);
 }

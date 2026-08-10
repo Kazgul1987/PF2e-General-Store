@@ -1,3 +1,49 @@
 {
-  "PF2EGeneralStore.ModuleName": "PF2e General Store"
+  "PF2EGeneralStore": {
+    "ModuleName": "PF2e General Store",
+    "Common": {
+      "Unavailable": "Nicht verfügbar"
+    },
+    "Store": {
+      "Unnamed": "Unbenannter Shop",
+      "Search": "Suchen...",
+      "NoResults": "Keine Ergebnisse.",
+      "LoadMore": "Mehr laden",
+      "SortAlpha": "Alphabetisch sortieren",
+      "PartyStash": "Party-Stash",
+      "Purchased": "{name} wurde gekauft."
+    },
+    "Cart": {
+      "Add": "In den Einkaufskorb",
+      "View": "Einkaufskorb anzeigen"
+    },
+    "Wishlist": {
+      "Add": "Auf Wunschliste",
+      "View": "Wunschliste anzeigen"
+    },
+    "Sale": {
+      "Open": "Verkaufen"
+    },
+    "Errors": {
+      "NoDescription": "Beschreibung nicht verfügbar.",
+      "Permission": "Keine Berechtigung für diese Transaktion.",
+      "InvalidPurchase": "Ungültige Kaufdaten.",
+      "InvalidSale": "Ungültige Verkaufsdaten.",
+      "PriceChanged": "Der Preis hat sich geändert. Bitte prüfe den Warenkorb erneut.",
+      "InsufficientFunds": "Nicht genug Gold für den Kauf.",
+      "PurchaseFailed": "Der Kauf ist fehlgeschlagen; eine mögliche Zahlung wurde zurückerstattet."
+    },
+    "Settings": {
+      "ShowButton": {
+        "Name": "General Store: Store-Button für Spieler",
+        "Hint": "Erlaubt Spielern den Store-Button auf ihren eigenen Charakterbögen."
+      },
+      "Filters": "General Store GM-Filter",
+      "Wishlist": "General Store Wunschliste",
+      "PlayerWishlist": "General Store Wunschliste (Spieler)",
+      "Logo": "General Store: Shop-Logo",
+      "Stores": "General Store: Shop-Definitionen",
+      "ActiveStore": "General Store: Aktiver Shop (Fallback)"
+    }
+  }
 }

@@ -36,11 +36,11 @@
         </label>
         <label class="store-option">
           <input type="checkbox" name="filter-sort-alpha" />
-          <span>Alphabetisch sortieren</span>
+          <span>{{localize "PF2EGeneralStore.Store.SortAlpha"}}</span>
         </label>
       </div>
       <div class="store-search">
-        <input type="search" name="store-search" placeholder="Suchen..." />
+        <input type="search" name="store-search" placeholder="{{localize "PF2EGeneralStore.Store.Search"}}" />
         <p class="store-search__hint">
           <span class="store-search__hint-text">Suchbegriff optional.</span>
           <span class="store-search__hint-note" data-search-hint></span>
@@ -49,21 +49,21 @@
       <div class="store-cart">
         <button class="store-cart__add" type="button">
           <i class="fas fa-shopping-cart" aria-hidden="true"></i>
-          In den Einkaufskorb
+          {{localize "PF2EGeneralStore.Cart.Add"}}
         </button>
         <button class="store-wishlist__add" type="button">
           <i class="fas fa-heart" aria-hidden="true"></i>
-          Auf Wunschliste
+          {{localize "PF2EGeneralStore.Wishlist.Add"}}
         </button>
         <button class="store-cart__view" type="button">
           Einkaufskorb anzeigen
         </button>
         <button class="store-wishlist__view" type="button">
-          Wunschliste anzeigen
+          {{localize "PF2EGeneralStore.Wishlist.View"}}
         </button>
         <button class="store-sell__open" type="button">
           <i class="fas fa-coins" aria-hidden="true"></i>
-          Verkaufen
+          {{localize "PF2EGeneralStore.Sale.Open"}}
         </button>
         <span class="store-cart__summary">
           Warenkorb: <span class="store-cart__total" data-cart-total>0 gp</span>
@@ -83,16 +83,16 @@
           {{#if actorGold}}
             {{actorGold}}
           {{else}}
-            Nicht verfügbar
+            {{localize "PF2EGeneralStore.Common.Unavailable"}}
           {{/if}}
         </div>
         <div class="store-availability__party">
           {{#if partyGold}}
             <i class="fas fa-users store-availability__icon" aria-hidden="true"></i>
-            Party-Stash {{partyGold}}
+            {{localize "PF2EGeneralStore.Store.PartyStash"}} {{partyGold}}
           {{else}}
             <i class="fas fa-users store-availability__icon" aria-hidden="true"></i>
-            Party-Stash: Nicht verfügbar
+            {{localize "PF2EGeneralStore.Store.PartyStash"}}: {{localize "PF2EGeneralStore.Common.Unavailable"}}
           {{/if}}
         </div>
       </div>
@@ -102,9 +102,9 @@
   <div class="store-main store-body">
     <div class="store-results">
       <ul>
-        <li class="placeholder">Keine Ergebnisse.</li>
+        <li class="placeholder">{{localize "PF2EGeneralStore.Store.NoResults"}}</li>
       </ul>
-      <button type="button" class="store-results__more is-hidden">Mehr laden</button>
+      <button type="button" class="store-results__more is-hidden">{{localize "PF2EGeneralStore.Store.LoadMore"}}</button>
     </div>
     <section class="store-description">
       <div class="store-description__content">

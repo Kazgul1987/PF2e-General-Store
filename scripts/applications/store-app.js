@@ -1,5 +1,11 @@
 import { rejectWishlistRequest, validateWishlistRequest } from "../wishlist/socket.js";
 import { purchaseItem } from "../pf2e/purchases.js";
+import { pay, copperToCoins } from "../pf2e/currency.js";
+import { quoteSale, sellItems } from "../pf2e/sales.js";
+import { getItemDescription, getItemIndex, hasItemIndex } from "../data/compendium-index.js";
+import { getActiveStore, getActiveStoreId, getStoreDefinitions, setActiveStoreId, setStoreDefinitions } from "../data/stores.js";
+import { addWishlistItem, moveWishlistItemToCart, moveWishlistPlayerToCart, normalizeWishlistState, removePlayerFromWishlist, removeWishlistItem, removeWishlistQuantity, setWishlistItemQuantity, wishlistTotal } from "../wishlist/model.js";
+import { createSpellConsumableSource, getDefaultSpellConsumableRank, getDefaultSpellConsumableType, getSpellConsumablePrice, getSpellConsumableRanks } from "../pf2e/spell-consumables.js";
 const MODULE_ID = "pf2e-general-store";
 const SHOP_DIALOG_TEMPLATE = `modules/${MODULE_ID}/templates/shop-dialog.hbs`;
 const GM_FILTERS_TEMPLATE = `modules/${MODULE_ID}/templates/gm-filters.hbs`;
@@ -10,18 +16,8 @@ const SHOW_STORE_BUTTON_SETTING = "showStoreButtonForPlayers";
 const WISHLIST_SETTING = "wishlistState";
 const WISHLIST_CLIENT_SETTING = "wishlistStateClient";
 const SHOP_LOGO_SETTING = "shopLogo";
-const STORE_DEFINITIONS_SETTING = "storeDefinitions";
-const ACTIVE_STORE_SETTING = "activeStoreId";
-const ACTIVE_STORE_SCENE_FLAG = "activeStoreId";
 const SELL_LOOT_FLAG_SCOPE = "world";
 const SELL_LOOT_FLAG_KEY = "sellLootActorId";
-const PACK_INDEX_CACHE = new Map();
-const SPELL_PACK_INDEX_CACHE = new Map();
-const ITEM_INDEX_CACHE = new Map();
-const SPELL_INDEX_CACHE = new Map();
-const ITEM_DESCRIPTION_CACHE = new Map();
-let itemIndexBuildPromise = null;
-let spellIndexBuildPromise = null;
 const DEFAULT_DESCRIPTION_PLACEHOLDER =
   '<p class="store-description__placeholder">Wähle ein Item aus, um die Beschreibung zu sehen.</p>';
 const DEFAULT_GM_FILTERS = {
@@ -39,35 +35,6 @@ let currentPlayerWishlistState = { ...DEFAULT_WISHLIST_STATE };
 const pendingWishlistMutationRequests = new Map();
 const WISHLIST_MUTATION_REQUEST_TIMEOUT_MS = 5000;
 const WISHLIST_OPTIONS_FLAG = "__wishlistOptions";
-const SPELL_CONSUMABLE_PRICE_BY_TYPE = {
-  scroll: new Map([
-    [1, 4],
-    [2, 12],
-    [3, 30],
-    [4, 70],
-    [5, 150],
-    [6, 300],
-    [7, 600],
-    [8, 1300],
-    [9, 3000],
-    [10, 8000],
-  ]),
-  wand: new Map([
-    [1, 60],
-    [2, 160],
-    [3, 360],
-    [4, 700],
-    [5, 1500],
-    [6, 3000],
-    [7, 6500],
-    [8, 15000],
-    [9, 40000],
-  ]),
-};
-const PF2E_SYSTEM_READY = new Promise((resolve) => {
-  Hooks.once("ready", () => resolve(true));
-});
-
 function debounce(callback, delay = 250) {
   let timeoutId;
   return (...args) => {
@@ -78,131 +45,8 @@ function debounce(callback, delay = 250) {
   };
 }
 
-function getItemCompendiumPacks() {
-  return game.packs.filter((pack) => pack.documentName === "Item");
-}
-
 function getSpellCompendiumPacks() {
-  return game.packs.filter(
-    (pack) => pack.documentName === "Spell" || pack.documentName === "Item"
-  );
-}
-
-function getPackIndex(pack) {
-  if (!PACK_INDEX_CACHE.has(pack.collection)) {
-    PACK_INDEX_CACHE.set(
-      pack.collection,
-      pack.getIndex({
-        fields: [
-          "img",
-          "system.level",
-          "system.price",
-          "system.publication",
-          "system.remaster",
-          "system.source",
-          "system.traits",
-          "flags.pf2e.legacy",
-          "type",
-        ],
-      })
-    );
-  }
-  return PACK_INDEX_CACHE.get(pack.collection);
-}
-
-function getSpellPackIndex(pack) {
-  if (!SPELL_PACK_INDEX_CACHE.has(pack.collection)) {
-    SPELL_PACK_INDEX_CACHE.set(
-      pack.collection,
-      pack.getIndex({
-        fields: [
-          "img",
-          "system.level",
-          "system.rank",
-          "system.publication",
-          "system.remaster",
-          "system.source",
-          "system.traits",
-          "system.ritual",
-          "flags.pf2e.legacy",
-          "type",
-        ],
-      })
-    );
-  }
-  return SPELL_PACK_INDEX_CACHE.get(pack.collection);
-}
-
-async function getCachedItemIndexEntries() {
-  if (ITEM_INDEX_CACHE.has("items")) {
-    return ITEM_INDEX_CACHE.get("items");
-  }
-  if (itemIndexBuildPromise) {
-    return itemIndexBuildPromise;
-  }
-
-  itemIndexBuildPromise = (async () => {
-    try {
-      const packs = getItemCompendiumPacks();
-      const indices = await Promise.all(packs.map((pack) => getPackIndex(pack)));
-      const entries = indices.flatMap((index, indexPosition) =>
-        Array.from(index).map((entry) => ({
-          entry,
-          pack: packs[indexPosition],
-        }))
-      );
-
-      ITEM_INDEX_CACHE.set("items", entries);
-      return entries;
-    } finally {
-      itemIndexBuildPromise = null;
-    }
-  })();
-
-  return itemIndexBuildPromise;
-}
-
-async function getCachedSpellIndexEntries() {
-  if (SPELL_INDEX_CACHE.has("spells")) {
-    return SPELL_INDEX_CACHE.get("spells");
-  }
-  if (spellIndexBuildPromise) {
-    return spellIndexBuildPromise;
-  }
-
-  spellIndexBuildPromise = (async () => {
-    try {
-      const packs = getSpellCompendiumPacks();
-      const indices = await Promise.all(
-        packs.map((pack) => getSpellPackIndex(pack))
-      );
-      const entryKeys = new Set();
-      const entries = [];
-      indices.forEach((index, indexPosition) => {
-        const pack = packs[indexPosition];
-        Array.from(index)
-          .filter(
-            (entry) => pack.documentName !== "Item" || entry.type === "spell"
-          )
-          .forEach((entry) => {
-            const entryKey =
-              entry.uuid ?? `${pack.collection}.${entry._id ?? ""}`;
-            if (!entryKey || entryKeys.has(entryKey)) {
-              return;
-            }
-            entryKeys.add(entryKey);
-            entries.push({ entry, pack });
-          });
-      });
-
-      SPELL_INDEX_CACHE.set("spells", entries);
-      return entries;
-    } finally {
-      spellIndexBuildPromise = null;
-    }
-  })();
-
-  return spellIndexBuildPromise;
+  return game.packs.filter((pack) => pack.documentName === "Spell" || pack.documentName === "Item");
 }
 
 const ALLOWED_ITEM_TYPES = new Set([
@@ -225,28 +69,6 @@ function isAllowedItemEntry(entry) {
   return entry.system?.consumableType === "ammo";
 }
 
-async function getItemDescription(packCollection, itemId) {
-  const cacheKey = `${packCollection}.${itemId}`;
-  if (ITEM_DESCRIPTION_CACHE.has(cacheKey)) {
-    return ITEM_DESCRIPTION_CACHE.get(cacheKey);
-  }
-
-  const pack = game.packs.get(packCollection);
-  if (!pack) {
-    return "<em>Beschreibung nicht verfügbar.</em>";
-  }
-
-  const item = await pack.getDocument(itemId);
-  const description =
-    item?.system?.description?.value ??
-    item?.system?.description ??
-    "<em>Keine Beschreibung verfügbar.</em>";
-  const enriched = await TextEditor.enrichHTML(description, { async: true });
-  const html = enriched || "<em>Keine Beschreibung verfügbar.</em>";
-  ITEM_DESCRIPTION_CACHE.set(cacheKey, html);
-  return html;
-}
-
 function getPriceInGold(entry) {
   const priceData = entry.system?.price?.value ?? entry.system?.price;
   if (typeof priceData === "number") {
@@ -259,19 +81,6 @@ function getPriceInGold(entry) {
     return priceData.value.gp;
   }
   return 0;
-}
-
-function getSpellConsumablePrice({ type, rank } = {}) {
-  if (!type || rank === null || rank === undefined) {
-    return 0;
-  }
-  const normalizedType = typeof type === "string" ? type.toLowerCase() : "";
-  const priceTable = SPELL_CONSUMABLE_PRICE_BY_TYPE[normalizedType];
-  const normalizedRank = Number(rank);
-  if (!priceTable || !Number.isFinite(normalizedRank)) {
-    return 0;
-  }
-  return priceTable.get(normalizedRank) ?? 0;
 }
 
 function formatGold(value) {
@@ -348,73 +157,6 @@ function normalizeGmFilters(filters = {}) {
   };
 }
 
-function normalizeWishlistPlayer(player = {}) {
-  const userId = typeof player.userId === "string" ? player.userId.trim() : "";
-  const name = typeof player.name === "string" ? player.name.trim() : "";
-  const avatar = typeof player.avatar === "string" ? player.avatar.trim() : "";
-  const tokenSrc = typeof player.tokenSrc === "string" ? player.tokenSrc.trim() : "";
-  const quantity = Number(player.quantity) || 0;
-
-  if (!userId && !name) {
-    return null;
-  }
-
-  return {
-    userId,
-    name,
-    avatar,
-    tokenSrc,
-    quantity: quantity > 0 ? quantity : 0,
-  };
-}
-
-function normalizeWishlistItem(item = {}) {
-  const itemId = typeof item.itemId === "string" ? item.itemId.trim() : "";
-  const pack = typeof item.pack === "string" ? item.pack.trim() : "";
-  const name = typeof item.name === "string" ? item.name.trim() : "";
-  const entryType = item.entryType === "spell" ? "spell" : "item";
-  const price = Number(item.price) || 0;
-  const quantity = Number(item.quantity) || 0;
-  const players = Array.isArray(item.players)
-    ? item.players.map(normalizeWishlistPlayer).filter(Boolean)
-    : [];
-
-  if (!itemId || !pack || !name || quantity <= 0) {
-    return null;
-  }
-
-  return {
-    itemId,
-    pack,
-    name,
-    entryType,
-    price: price > 0 ? price : 0,
-    quantity,
-    players,
-  };
-}
-
-function normalizeWishlistState(state = {}) {
-  const items = {};
-  if (state && typeof state === "object" && state.items && typeof state.items === "object") {
-    Object.entries(state.items).forEach(([key, value]) => {
-      const normalized = normalizeWishlistItem(value);
-      if (normalized) {
-        items[key] = normalized;
-      }
-    });
-  }
-  return { items };
-}
-
-function calculateWishlistTotal(state) {
-  const wishlistState = normalizeWishlistState(state);
-  return Object.values(wishlistState.items).reduce(
-    (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
-    0
-  );
-}
-
 function buildWishlistDialogItems(state, currentUserId) {
   const wishlistState = normalizeWishlistState(state);
   return Object.entries(wishlistState.items).map(([key, item]) => {
@@ -472,7 +214,7 @@ async function setWorldWishlistState(state) {
   game.socket?.emit(`module.${MODULE_ID}`, {
     type: "wishlistUpdate",
     state: normalized,
-    total: calculateWishlistTotal(normalized),
+    total: wishlistTotal(normalized),
   });
   return normalized;
 }
@@ -515,128 +257,10 @@ async function migratePlayerWishlistState() {
   return setPlayerWishlistState(worldState);
 }
 
-function addWishlistItem(state, item, player) {
-  const wishlistState = normalizeWishlistState(state);
-  const normalizedItem = normalizeWishlistItem(item);
-  if (!normalizedItem) {
-    return { state: wishlistState, total: calculateWishlistTotal(wishlistState) };
-  }
-  const key = `${normalizedItem.pack}.${normalizedItem.itemId}`;
-  const existing = wishlistState.items[key];
-  if (existing) {
-    existing.quantity += normalizedItem.quantity;
-    existing.price = normalizedItem.price;
-    existing.name = normalizedItem.name;
-    if (player) {
-      const normalizedPlayer = normalizeWishlistPlayer(player);
-      if (normalizedPlayer) {
-        const existingPlayer = existing.players.find(
-          (entry) => entry.userId === normalizedPlayer.userId
-        );
-        if (existingPlayer) {
-          existingPlayer.quantity += normalizedPlayer.quantity;
-        } else {
-          existing.players.push(normalizedPlayer);
-        }
-      }
-    }
-    wishlistState.items[key] = existing;
-  } else {
-    const players = [];
-    const normalizedPlayer = normalizeWishlistPlayer(player);
-    if (normalizedPlayer) {
-      players.push(normalizedPlayer);
-    }
-    wishlistState.items[key] = { ...normalizedItem, players };
-  }
-  return { state: wishlistState, total: calculateWishlistTotal(wishlistState) };
-}
-
-function removeWishlistItem(state, key) {
-  const wishlistState = normalizeWishlistState(state);
-  if (key && wishlistState.items[key]) {
-    delete wishlistState.items[key];
-  }
-  return { state: wishlistState, total: calculateWishlistTotal(wishlistState) };
-}
-
-function setWishlistItemQuantity(state, key, quantity) {
-  const wishlistState = normalizeWishlistState(state);
-  if (!key || !wishlistState.items[key]) {
-    return { state: wishlistState, total: calculateWishlistTotal(wishlistState) };
-  }
-  const nextQuantity = Number(quantity) || 0;
-  if (nextQuantity <= 0) {
-    delete wishlistState.items[key];
-  } else {
-    wishlistState.items[key].quantity = nextQuantity;
-  }
-  return { state: wishlistState, total: calculateWishlistTotal(wishlistState) };
-}
-
-function moveWishlistItemToCart(state, key, quantity) {
-  const wishlistState = normalizeWishlistState(state);
-  const item = wishlistState.items[key];
-  if (!item) {
-    return { state: wishlistState, total: calculateWishlistTotal(wishlistState), moved: null };
-  }
-  const moveQuantity = Number(quantity) || item.quantity;
-  const moved = { ...item, quantity: Math.min(moveQuantity, item.quantity) };
-  const remaining = item.quantity - moved.quantity;
-  if (remaining <= 0) {
-    delete wishlistState.items[key];
-  } else {
-    wishlistState.items[key].quantity = remaining;
-  }
-  return { state: wishlistState, total: calculateWishlistTotal(wishlistState), moved };
-}
-
-function moveWishlistPlayerToCart(state, key, userId, quantity) {
-  const wishlistState = normalizeWishlistState(state);
-  const item = wishlistState.items[key];
-  if (!item || !userId) {
-    return { state: wishlistState, total: calculateWishlistTotal(wishlistState), moved: null };
-  }
-  const playerIndex = Array.isArray(item.players)
-    ? item.players.findIndex((player) => player.userId === userId)
-    : -1;
-  if (playerIndex < 0) {
-    return { state: wishlistState, total: calculateWishlistTotal(wishlistState), moved: null };
-  }
-  const playerEntry = item.players[playerIndex];
-  const moveQuantity = Math.min(Number(quantity) || 0, playerEntry.quantity || 0);
-  if (moveQuantity <= 0) {
-    return { state: wishlistState, total: calculateWishlistTotal(wishlistState), moved: null };
-  }
-
-  const moved = { ...item, quantity: moveQuantity };
-  playerEntry.quantity -= moveQuantity;
-  item.quantity -= moveQuantity;
-
-  if (playerEntry.quantity <= 0) {
-    item.players.splice(playerIndex, 1);
-  }
-
-  if (item.quantity <= 0 || item.players.length === 0) {
-    delete wishlistState.items[key];
-  } else {
-    wishlistState.items[key] = item;
-  }
-
-  return { state: wishlistState, total: calculateWishlistTotal(wishlistState), moved };
-}
-
-function removePlayerFromWishlist(state, key, userId, quantity) {
-  const result = moveWishlistPlayerToCart(state, key, userId, quantity);
-  if (!result) {
-    return result;
-  }
-  return { state: result.state, total: result.total, removed: result.moved };
-}
-
 const WISHLIST_MUTATIONS = {
   addItem: addWishlistItem,
   removeItem: removeWishlistItem,
+  removeQuantity: removeWishlistQuantity,
   setQuantity: setWishlistItemQuantity,
   moveToCart: moveWishlistItemToCart,
   movePlayerToCart: moveWishlistPlayerToCart,
@@ -669,25 +293,22 @@ async function applyWishlistMutationAsGm(type, ...args) {
 }
 
 function requestWishlistMutation(type, args) {
-  if (!game.socket) {
-    ui.notifications?.warn("Wishlist-Synchronisation nicht verfügbar.");
-    return Promise.resolve(null);
-  }
+  if (!game.socket) return Promise.resolve(null);
   const requestId = getWishlistMutationRequestId();
+  let payload = null;
+  if (type === "addItem") {
+    const [item, player] = args;
+    payload = { type: "wishlist:add", requestId, packId: item?.pack, itemId: item?.itemId,
+      quantity: Number(item?.quantity) };
+  } else if (type === "removePlayerFromWishlist") {
+    const [itemKey, _contributorId, quantity] = args;
+    payload = { type: "wishlist:remove", requestId, itemKey, quantity: Number(quantity) };
+  }
+  if (!payload) return Promise.resolve(null);
   return new Promise((resolve) => {
-    const timeoutId = setTimeout(() => {
-      pendingWishlistMutationRequests.delete(requestId);
-      ui.notifications?.warn("Wishlist-Aktualisierung dauert zu lange.");
-      resolve(null);
-    }, WISHLIST_MUTATION_REQUEST_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => { pendingWishlistMutationRequests.delete(requestId); resolve(null); }, WISHLIST_MUTATION_REQUEST_TIMEOUT_MS);
     pendingWishlistMutationRequests.set(requestId, { resolve, timeoutId });
-    game.socket.emit(`module.${MODULE_ID}`, {
-      type: "wishlistMutationRequest",
-      requestId,
-      mutationType: type,
-      userId: game.user.id,
-      args,
-    });
+    game.socket.emit(`module.${MODULE_ID}`, payload);
   });
 }
 
@@ -768,44 +389,6 @@ function getCurrentShopLogo(fallback = "") {
   const configured = game.settings?.get(MODULE_ID, SHOP_LOGO_SETTING) ?? "";
   const value = typeof configured === "string" ? configured.trim() : "";
   return value || fallback || "";
-}
-
-function getStoreDefinitions() {
-  return game.settings?.get(MODULE_ID, STORE_DEFINITIONS_SETTING) ?? {};
-}
-
-async function setStoreDefinitions(definitions) {
-  const normalized = definitions && typeof definitions === "object" ? definitions : {};
-  await game.settings.set(MODULE_ID, STORE_DEFINITIONS_SETTING, normalized);
-  game.socket?.emit(`module.${MODULE_ID}`, { type: "storeDefinitionsUpdate" });
-  refreshOpenStoreDialogs();
-  return normalized;
-}
-
-function getActiveStoreId() {
-  const sceneValue = canvas?.scene?.getFlag?.(MODULE_ID, ACTIVE_STORE_SCENE_FLAG) ?? null;
-  if (typeof sceneValue === "string" && sceneValue.length) return sceneValue;
-  const fallback = game.settings?.get(MODULE_ID, ACTIVE_STORE_SETTING) ?? "";
-  return typeof fallback === "string" && fallback.length ? fallback : null;
-}
-
-async function setActiveStoreId(storeId) {
-  const value = typeof storeId === "string" ? storeId : "";
-  if (canvas?.scene?.setFlag) {
-    await canvas.scene.setFlag(MODULE_ID, ACTIVE_STORE_SCENE_FLAG, value);
-  } else {
-    await game.settings.set(MODULE_ID, ACTIVE_STORE_SETTING, value);
-  }
-  game.socket?.emit(`module.${MODULE_ID}`, { type: "activeStoreUpdate", storeId: value });
-  refreshOpenStoreDialogs();
-}
-
-function getActiveStore() {
-  const definitions = getStoreDefinitions();
-  const id = getActiveStoreId();
-  if (!id) return null;
-  const store = definitions?.[id] ?? null;
-  return store && typeof store === "object" ? store : null;
 }
 
 function formatActiveStoreLabel(store) {
@@ -1097,14 +680,14 @@ async function updateSearchResults(query, listElement, gmFiltersOverride) {
 
   const gmFilters = gmFiltersOverride ?? getCurrentGmFilters();
   const itemEntriesPromise = showItems
-    ? getCachedItemIndexEntries()
+    ? getItemIndex()
     : Promise.resolve([]);
   const spellEntriesPromise = showSpells
-    ? getCachedSpellIndexEntries()
+    ? getItemIndex({ spells: true })
     : Promise.resolve([]);
   if (
-    (showItems && !ITEM_INDEX_CACHE.has("items")) ||
-    (showSpells && !SPELL_INDEX_CACHE.has("spells"))
+    (showItems && !hasItemIndex()) ||
+    (showSpells && !hasItemIndex({ spells: true }))
   ) {
     renderSearchLoading(listElement);
     resetResultSelection(listElement);
@@ -1305,7 +888,7 @@ async function deductCurrency(actor, costGold) {
   if (!update.ok) {
     return update;
   }
-  await actor.inventory.removeCurrency(update.costCoins, { byValue: true });
+  await pay(actor, Math.round(costGold * 100));
   return { ok: true };
 }
 
@@ -1326,12 +909,17 @@ async function handlePurchase({ actor, packCollection, itemId, name, priceGold, 
     const result = await purchaseItem({
       buyer: actor,
       paymentActor,
-      itemSource: item.toObject(),
+      packId: packCollection,
+      itemId,
       quantity: Number(quantity),
-      priceCopper: Math.round(authoritativeGold * 100),
+      expectedPriceCopper: Math.round(authoritativeGold * 100),
       storeId: getActiveStoreId(),
     });
     if (!result.ok) {
+      if (result.reason === "price-changed") {
+        ui.notifications.warn(game.i18n.localize("PF2EGeneralStore.Errors.PriceChanged"));
+        return;
+      }
       ui.notifications.warn(game.i18n.localize("PF2EGeneralStore.Errors.InsufficientFunds"));
       return;
     }
@@ -1582,10 +1170,7 @@ function getCartItemPrice(item) {
     return storedPrice;
   }
   if (item.entryType === "spell") {
-    const consumablePrice = getSpellConsumablePrice({
-      type: item.consumableType,
-      rank: item.rank,
-    });
+    const consumablePrice = getSpellConsumablePrice(item.consumableType, item.rank);
     if (Number.isFinite(consumablePrice) && consumablePrice > 0) {
       return consumablePrice;
     }
@@ -1772,13 +1357,6 @@ function buildSelectOptionHTML({ value, label, selected }) {
   return option.outerHTML;
 }
 
-function getSpellConsumableRanks(type) {
-  return Object.keys(CONFIG?.PF2E?.spellcastingItems?.[type]?.compendiumUuids ?? {})
-    .map((rank) => Number(rank))
-    .filter((rank) => Number.isFinite(rank))
-    .sort((a, b) => a - b);
-}
-
 function openSpellConsumableSelectionDialog(spell) {
   return new Promise((resolve) => {
     let resolved = false;
@@ -1914,134 +1492,6 @@ function openSpellConsumableSelectionDialog(spell) {
       });
     });
   });
-}
-
-function getSpellcastingItemConfig(type, rank) {
-  const spellcastingItems = CONFIG?.PF2E?.spellcastingItems ?? {};
-  const itemData = spellcastingItems[type];
-  const uuid = itemData?.compendiumUuids?.[rank] ?? null;
-  if (!itemData || !uuid) {
-    return null;
-  }
-  return { itemData, uuid };
-}
-
-function getDefaultSpellConsumableType() {
-  const spellcastingItems = CONFIG?.PF2E?.spellcastingItems ?? {};
-  if (spellcastingItems.scroll) {
-    return "scroll";
-  }
-  const availableTypes = Object.keys(spellcastingItems);
-  return availableTypes.length ? availableTypes[0] : null;
-}
-
-function getDefaultSpellConsumableRank(spell, type) {
-  const spellRank = getEntryLevel(spell);
-  const ranks = Object.keys(
-    CONFIG?.PF2E?.spellcastingItems?.[type]?.compendiumUuids ?? {}
-  )
-    .map((rank) => Number(rank))
-    .filter((rank) => Number.isFinite(rank))
-    .sort((a, b) => a - b);
-  if (Number.isFinite(spellRank) && ranks.includes(spellRank)) {
-    return spellRank;
-  }
-  return ranks.length ? ranks[0] : spellRank ?? null;
-}
-
-function cloneData(value) {
-  if (typeof foundry?.utils?.deepClone === "function") {
-    return foundry.utils.deepClone(value);
-  }
-  if (typeof structuredClone === "function") {
-    return structuredClone(value);
-  }
-  return JSON.parse(JSON.stringify(value));
-}
-
-function getRandomId() {
-  if (typeof foundry?.utils?.randomID === "function") {
-    return foundry.utils.randomID();
-  }
-  if (typeof randomID === "function") {
-    return randomID();
-  }
-  return Math.random().toString(36).slice(2);
-}
-
-async function createConsumableSourceFromSpell(spell, options = {}) {
-  await PF2E_SYSTEM_READY;
-  const selectedType = options.type ?? getDefaultSpellConsumableType();
-  const selectedRank =
-    options.rank ?? getDefaultSpellConsumableRank(spell, selectedType);
-  if (!selectedType || selectedRank === null || selectedRank === undefined) {
-    ui.notifications?.error("Kein gültiger Spell-Consumable-Typ/Rang gefunden.");
-    return null;
-  }
-
-  const config = getSpellcastingItemConfig(selectedType, selectedRank);
-  if (!config) {
-    ui.notifications?.error("Keine Vorlage für den Spell-Consumable gefunden.");
-    return null;
-  }
-
-  const consumable = await fromUuid(config.uuid);
-  if (!consumable?.toObject) {
-    ui.notifications?.error("Consumable-Vorlage konnte nicht geladen werden.");
-    return null;
-  }
-
-  const consumableSource = consumable.toObject();
-  consumableSource._id = null;
-  consumableSource.system = consumableSource.system ?? {};
-
-  const nameTemplate = config.itemData?.nameTemplate ?? "{name}";
-  consumableSource.name = game.i18n.format(nameTemplate, {
-    name: spell.name ?? "",
-    level: selectedRank,
-  });
-
-  const spellTraits = normalizeTraits(spell.system?.traits);
-  const spellRarity = normalizeRarity(spell.system?.traits?.rarity);
-  consumableSource.system.traits = {
-    ...(consumableSource.system.traits ?? {}),
-    value: spellTraits,
-    rarity: spellRarity ?? consumableSource.system?.traits?.rarity,
-  };
-
-  const spellSource = cloneData(spell._source ?? spell.toObject());
-  spellSource._id = getRandomId();
-  const mergedSpellSource = foundry.utils.mergeObject(
-    spellSource,
-    {
-      system: {
-        location: {
-          heightenedLevel: selectedRank,
-        },
-      },
-    },
-    { inplace: false }
-  );
-  consumableSource.system.spell = mergedSpellSource;
-
-  if (spell.system?.description) {
-    consumableSource.system.description = cloneData(spell.system.description);
-  }
-
-  if (options.mystified) {
-    consumableSource.system.identification = {
-      ...(consumableSource.system.identification ?? {}),
-      status: "unidentified",
-    };
-  }
-
-  return {
-    consumableSource,
-    consumableType: selectedType,
-    rank: selectedRank,
-    price: getSpellConsumablePrice({ type: selectedType, rank: selectedRank }),
-    consumableImg: consumableSource.img ?? consumable.img ?? null,
-  };
 }
 
 function setupResultInteractions(resultsList) {
@@ -2253,7 +1703,7 @@ async function openShopDialog(actor) {
         if (!selection) {
           return;
         }
-        spellDetails = await createConsumableSourceFromSpell(spell, selection);
+        spellDetails = await createSpellConsumableSource(spell, selection);
         if (!spellDetails) {
           return;
         }
@@ -2339,7 +1789,8 @@ async function openShopDialog(actor) {
           price: priceGold,
           quantity,
         },
-        player
+        player,
+        { [WISHLIST_OPTIONS_FLAG]: true, syncWithGm: true }
       );
       ui.notifications.info("Zur Wunschliste hinzugefügt.");
     };
@@ -2448,10 +1899,10 @@ async function openShopDialog(actor) {
         : "Nicht verfügbar";
       const currentUserId = game.user?.id ?? "";
       const items = buildWishlistDialogItems(wishlistState, currentUserId);
-      const wishlistTotal = calculateWishlistTotal(wishlistState);
-      const totalValue = `${formatGold(wishlistTotal)} gp`;
+      const wishlistTotalValue = wishlistTotal(wishlistState);
+      const totalValue = `${formatGold(wishlistTotalValue)} gp`;
       const remainingValue = hasPartyCurrency
-        ? `${formatGold(getCurrencyInCopper(partyCurrency) / 100 - wishlistTotal)} gp`
+        ? `${formatGold(getCurrencyInCopper(partyCurrency) / 100 - wishlistTotalValue)} gp`
         : "Nicht verfügbar";
       const content = await renderTemplate(WISHLIST_DIALOG_TEMPLATE, {
         items,
@@ -2475,7 +1926,8 @@ async function openShopDialog(actor) {
             "removePlayerFromWishlist",
             key,
             currentUserId,
-            quantity
+            quantity,
+            { [WISHLIST_OPTIONS_FLAG]: true, syncWithGm: true }
           );
         }
         return true;
@@ -2554,8 +2006,8 @@ async function openShopDialog(actor) {
     if (!Number.isFinite(Number(resultsList.data("resultLimit")))) {
       resultsList.data("resultLimit", MAX_SEARCH_RESULTS);
     }
-    void getCachedItemIndexEntries();
-    void getCachedSpellIndexEntries();
+    void getItemIndex();
+    void getItemIndex({ spells: true });
     const debouncedSearch = debounce((value) => {
       {
       const filters = getEffectiveShopFilters();
@@ -2803,6 +2255,7 @@ async function openSellSelectionDialog({ title, sourceActor, payoutActor, allowS
       return `
         <div class="sell-dialog__item">
           <input type="checkbox" name="sell-item" value="${item.id}" />
+          <input type="number" name="sell-quantity-${item.id}" min="1" max="${qty}" value="${qty}" aria-label="Menge" />
           <div>
             <div><strong>${escapeHtmlSafe(item.name)}</strong> <span class="sell-dialog__meta">x${qty} • ${meta}</span></div>
           </div>
@@ -2850,7 +2303,17 @@ async function openSellSelectionDialog({ title, sourceActor, payoutActor, allowS
             }
 
             const selected = items.filter((it) => checked.includes(it.id));
-            const payout = computePayoutForItems(selected);
+            const selections = selected.map((item) => ({
+              itemId: item.id,
+              quantity: Number(html.find(`[name="sell-quantity-${item.id}"]`).val()),
+            }));
+            if (selections.some(({ quantity }, index) => !Number.isSafeInteger(quantity) || quantity < 1 || quantity > getItemQuantitySafe(selected[index]))) {
+              ui.notifications.warn("Bitte gültige Verkaufsmengen wählen.");
+              finish(false);
+              return;
+            }
+            const payoutCopper = quoteSale({ sourceActor, selections, store: getActiveStore() });
+            const payout = new game.pf2e.Coins(copperToCoins(payoutCopper));
             const ok = await confirmSaleDialog({
               sourceName: sourceActor.name,
               itemCount: selected.length,
@@ -2861,9 +2324,13 @@ async function openSellSelectionDialog({ title, sourceActor, payoutActor, allowS
               return;
             }
 
-            await sourceActor.deleteEmbeddedDocuments("Item", selected.map((i) => i.id));
-            if (payout?.copperValue > 0) {
-              await payoutActor.inventory.addCoins(payout);
+            try {
+              await sellItems({ sourceActor, payoutActor, selections, store: getActiveStore() });
+            } catch (error) {
+              console.error(`[${MODULE_ID}] Sale failed`, { actorId: sourceActor.id, payoutActorId: payoutActor.id, error });
+              ui.notifications.error("Verkauf fehlgeschlagen. Es wurden keine Gegenstände stillschweigend entfernt.");
+              finish(false);
+              return;
             }
 
             await postSaleChatMessage({
@@ -2889,16 +2356,6 @@ async function openSellSelectionDialog({ title, sourceActor, payoutActor, allowS
   });
 
   return confirmed;
-}
-
-function computePayoutForItems(items) {
-  const { Coins } = game.pf2e;
-  let payout = new Coins();
-  for (const item of items) {
-    const value = getSellValueForItem(item);
-    if (value) payout = payout.plus(value);
-  }
-  return payout;
 }
 
 async function confirmSaleDialog({ sourceName, itemCount, payout }) {
@@ -2962,7 +2419,9 @@ async function sellAllFromLootActorToParty({ lootActor, partyActor }) {
     return;
   }
 
-  const payout = computePayoutForItems(items);
+  const selections = items.map((item) => ({ itemId: item.id, quantity: getItemQuantitySafe(item) }));
+  const payoutCopper = quoteSale({ sourceActor: lootActor, selections, store: getActiveStore() });
+  const payout = new game.pf2e.Coins(copperToCoins(payoutCopper));
   const ok = await confirmSaleDialog({
     sourceName: lootActor.name,
     itemCount: items.length,
@@ -2973,9 +2432,12 @@ async function sellAllFromLootActorToParty({ lootActor, partyActor }) {
     return;
   }
 
-  await lootActor.deleteEmbeddedDocuments("Item", items.map((i) => i.id));
-  if (payout?.copperValue > 0) {
-    await partyActor.inventory.addCoins(payout);
+  try {
+    await sellItems({ sourceActor: lootActor, payoutActor: partyActor, selections, store: getActiveStore() });
+  } catch (error) {
+    console.error(`[${MODULE_ID}] Loot sale failed`, { actorId: lootActor.id, payoutActorId: partyActor.id, error });
+    ui.notifications.error("Verkauf fehlgeschlagen. Bitte Inventar und Währung prüfen.");
+    return;
   }
 
   await postSaleChatMessage({
@@ -3191,10 +2653,10 @@ async function openGlobalWishlistDialog() {
     ? formatCurrencyInGold(partyCurrency) ?? "Nicht verfügbar"
     : "Nicht verfügbar";
   const items = buildWishlistDialogItems(wishlistState, "");
-  const wishlistTotal = calculateWishlistTotal(wishlistState);
-  const totalValue = `${formatGold(wishlistTotal)} gp`;
+  const wishlistTotalValue = wishlistTotal(wishlistState);
+  const totalValue = `${formatGold(wishlistTotalValue)} gp`;
   const remainingValue = hasPartyCurrency
-    ? `${formatGold(getCurrencyInCopper(partyCurrency) / 100 - wishlistTotal)} gp`
+    ? `${formatGold(getCurrencyInCopper(partyCurrency) / 100 - wishlistTotalValue)} gp`
     : "Nicht verfügbar";
   const content = await renderTemplate(WISHLIST_DIALOG_TEMPLATE, {
     items,
@@ -3391,16 +2853,6 @@ function addGmChatControlButton(app, html) {
   target.append(button);
 }
 
-function invalidateCompendiumCaches() {
-  PACK_INDEX_CACHE.clear();
-  SPELL_PACK_INDEX_CACHE.clear();
-  ITEM_INDEX_CACHE.clear();
-  SPELL_INDEX_CACHE.clear();
-  ITEM_DESCRIPTION_CACHE.clear();
-  itemIndexBuildPromise = null;
-  spellIndexBuildPromise = null;
-}
-
 export function registerPF2eGeneralStore() {
   Hooks.on("renderActorSheet", addActorSheetHeaderControl);
   Hooks.on("renderActorSheetPF2e", addActorSheetHeaderControl);
@@ -3413,12 +2865,13 @@ Hooks.once("ready", () => {
   currentWishlistState = getWorldWishlistState();
   currentPlayerWishlistState = getPlayerWishlistState();
   void migratePlayerWishlistState();
-  Hooks.on("updateCompendium", invalidateCompendiumCaches);
-  Hooks.on("createCompendium", invalidateCompendiumCaches);
-  Hooks.on("deleteCompendium", invalidateCompendiumCaches);
   game.socket?.on(`module.${MODULE_ID}`, (payload) => {
     if (payload?.type === "gmFiltersUpdate") {
       currentGmFilters = normalizeGmFilters(payload.filters ?? {});
+      refreshOpenStoreDialogs();
+      return;
+    }
+    if (payload?.type === "stores:update" || payload?.type === "store:active") {
       refreshOpenStoreDialogs();
       return;
     }
@@ -3426,7 +2879,7 @@ Hooks.once("ready", () => {
       currentWishlistState = normalizeWishlistState(payload.state ?? {});
       return;
     }
-    if (payload?.type === "wishlistMutationResult") {
+    if (payload?.type === "wishlist:result") {
       const requestId = payload.requestId;
       if (!requestId || !pendingWishlistMutationRequests.has(requestId)) {
         return;
@@ -3439,26 +2892,23 @@ Hooks.once("ready", () => {
       pending?.resolve?.(payload.result ?? null);
       return;
     }
-    if (payload?.type === "wishlistMutationRequest") {
-      if (!game.user?.isGM) {
-        return;
-      }
-      const requestId = payload.requestId;
-      const mutationType = payload.mutationType;
-      const args = Array.isArray(payload.args) ? payload.args : [];
-      const validated = validateWishlistRequest(payload);
-      if (!validated) {
-        rejectWishlistRequest(payload);
-        return;
-      }
+    if (["wishlist:add", "wishlist:remove"].includes(payload?.type)) {
+      if (!game.user?.isGM) return;
       void (async () => {
-        const result = await applyWishlistMutationAsGm(mutationType, ...args);
-        game.socket?.emit(`module.${MODULE_ID}`, {
-          type: "wishlistMutationResult",
-          requestId,
-          result,
-        });
-      })();
-    }
-  });
+        const validated = await validateWishlistRequest(payload);
+        if (!validated) { rejectWishlistRequest(payload); return; }
+        let result;
+        if (validated.type === "wishlist:add") {
+          const document = validated.item;
+          const price = getPriceInGold(document);
+          result = await applyWishlistMutationAsGm("addItem", {
+            itemId: document.id, pack: validated.pack.collection, name: document.name,
+            entryType: document.type === "spell" ? "spell" : "item", price, quantity: validated.quantity,
+          }, null);
+        } else {
+          result = await applyWishlistMutationAsGm("removeQuantity", validated.itemKey, validated.quantity);
+        }
+        game.socket?.emit(`module.${MODULE_ID}`, { type: "wishlist:result", requestId: validated.requestId, result });
+      })().catch((error) => console.error(`[${MODULE_ID}] Wishlist socket request failed`, { requestId: payload.requestId, error }));
+    }  });
 });

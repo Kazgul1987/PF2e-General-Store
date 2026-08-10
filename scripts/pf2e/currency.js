@@ -34,8 +34,8 @@ export async function pay(actor, copper) {
 }
 
 export async function payout(actor, copper) {
-  if (!actor?.inventory?.addCoins) throw new Error("PF2e addCoins API unavailable");
-  await actor.inventory.addCoins(copperToCoins(copper));
+  if (!actor?.inventory?.addCurrency) throw new Error("PF2e addCurrency API unavailable");
+  await actor.inventory.addCurrency(copperToCoins(copper));
 }
 
 export function formatCopper(copper) {

@@ -30,6 +30,8 @@ export function getItemIndex({ spells = false } = {}) {
   return promise;
 }
 
+export function hasItemIndex({ spells = false } = {}) { return aggregatePromises.has(spells ? "spells" : "items"); }
+
 export async function getItemDescription(packId, itemId) {
   const key = `${packId}.${itemId}`;
   if (descriptions.has(key)) return descriptions.get(key);

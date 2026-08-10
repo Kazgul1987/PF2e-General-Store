@@ -1,10 +1,18 @@
-import { pay, payout } from "./currency.js";
+import { normalizePrice, pay, payout } from "./currency.js";
 import { log } from "../logger.js";
 
-export async function purchaseItem({ buyer, paymentActor, itemSource, quantity = 1, priceCopper, storeId = "" }) {
+function itemPriceCopper(item) {
+  return normalizePrice(item?.system?.price);
+}
+
+export async function purchaseItem({ buyer, paymentActor, packId, itemId, quantity = 1, expectedPriceCopper, storeId = "" }) {
   const count = Number(quantity);
+  const item = await game.packs.get(packId)?.getDocument(itemId);
+  const priceCopper = itemPriceCopper(item);
+  const itemSource = item?.toObject();
   if (!buyer?.isOwner || !paymentActor?.isOwner) throw new Error("PF2EGeneralStore.Errors.Permission");
   if (!itemSource || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(priceCopper) || priceCopper < 0) throw new Error("PF2EGeneralStore.Errors.InvalidPurchase");
+  if (Number.isSafeInteger(expectedPriceCopper) && expectedPriceCopper !== priceCopper) return { ok: false, reason: "price-changed", priceCopper };
   const total = priceCopper * count;
   if (!(await pay(paymentActor, total))) return { ok: false, reason: "insufficient-funds" };
   try {

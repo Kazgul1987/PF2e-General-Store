@@ -1,31 +1,34 @@
+import { SOCKET_TYPES } from "../constants.js";
 import { log } from "../logger.js";
 
 const REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
-const ALLOWED_MUTATIONS = new Set(["addItem", "removePlayerFromWishlist"]);
+const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const PACK_ID = /^[A-Za-z0-9_.-]{1,128}$/;
+const TYPES = new Set([SOCKET_TYPES.WISHLIST_ADD, SOCKET_TYPES.WISHLIST_REMOVE]);
 
-/** Validate the legacy-compatible, explicitly whitelisted wishlist protocol. */
-export function validateWishlistRequest(payload) {
-  if (!payload || typeof payload !== "object" || !REQUEST_ID.test(payload.requestId ?? "")) return null;
-  if (!ALLOWED_MUTATIONS.has(payload.mutationType) || !Array.isArray(payload.args)) return null;
-  const user = game.users?.get(payload.userId);
-  if (!user?.active || user.isGM) return null;
-  const [first, second, third] = payload.args;
-  if (payload.mutationType === "addItem") {
-    const quantity = Number(first?.quantity);
-    if (payload.args.length !== 2 || typeof first?.itemId !== "string" || typeof first?.pack !== "string"
-      || !Number.isSafeInteger(quantity) || quantity < 1 || second?.userId !== user.id) return null;
-  } else {
-    const quantity = Number(third);
-    if (payload.args.length !== 3 || typeof first !== "string" || second !== user.id
-      || !Number.isSafeInteger(quantity) || quantity < 1) return null;
+/**
+ * Module sockets do not supply a trustworthy sender identity. Consequently this
+ * protocol accepts no user/actor ID at all: requests can only adjust wishlist
+ * quantities, and every compendium/item reference is resolved again by the GM.
+ */
+export async function validateWishlistRequest(payload) {
+  if (!payload || typeof payload !== "object" || !TYPES.has(payload.type) || !REQUEST_ID.test(payload.requestId ?? "")) return null;
+  const quantity = Number(payload.quantity);
+  if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 999) return null;
+  if (payload.type === SOCKET_TYPES.WISHLIST_ADD) {
+    if (!PACK_ID.test(payload.packId ?? "") || !DOCUMENT_ID.test(payload.itemId ?? "")) return null;
+    const pack = game.packs?.get(payload.packId);
+    const item = await pack?.getDocument(payload.itemId);
+    if (!item || !["Item", "Spell"].includes(pack.documentName)) return null;
+    return { type: payload.type, requestId: payload.requestId, quantity, pack, item };
   }
-  return { requestId: payload.requestId, mutationType: payload.mutationType, args: payload.args, user };
+  if (typeof payload.itemKey !== "string" || payload.itemKey.length > 256) return null;
+  return { type: payload.type, requestId: payload.requestId, quantity, itemKey: payload.itemKey };
 }
 
 export function rejectWishlistRequest(payload) {
   log.warn("Rejected wishlist socket request", {
     requestId: typeof payload?.requestId === "string" ? payload.requestId : null,
-    type: typeof payload?.mutationType === "string" ? payload.mutationType : null,
-    userId: typeof payload?.userId === "string" ? payload.userId : null,
+    type: typeof payload?.type === "string" ? payload.type : null,
   });
 }

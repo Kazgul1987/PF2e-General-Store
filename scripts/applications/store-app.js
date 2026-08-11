@@ -1,2605 +1,283 @@
 import { buildWishlistMutationPayload, contributorFromUser, rejectWishlistRequest, validateWishlistRequest } from "../wishlist/socket.js";
 import { purchaseItem } from "../pf2e/purchases.js";
-import { pay, copperToCoins } from "../pf2e/currency.js";
+import { copperToCoins } from "../pf2e/currency.js";
 import { quoteSale, sellItems } from "../pf2e/sales.js";
-import { getItemDescription, getItemIndex, hasItemIndex } from "../data/compendium-index.js";
-import { getActiveStore, getActiveStoreId, getStoreDefinitions, setActiveStoreId, setStoreDefinitions } from "../data/stores.js";
-import { addWishlistItem, moveWishlistItemToCart, moveWishlistPlayerToCart, normalizeWishlistState, removePlayerFromWishlist, removeWishlistItem, removeWishlistQuantity, setWishlistItemQuantity, wishlistTotal } from "../wishlist/model.js";
 import { createSpellConsumableSource, getDefaultSpellConsumableRank, getDefaultSpellConsumableType, getSpellConsumablePrice, getSpellConsumableRanks } from "../pf2e/spell-consumables.js";
-import { DEFAULT_GM_FILTERS, DEFAULT_WISHLIST_STATE, FLAGS, MODULE_ID, SETTINGS, SOCKET_TYPES, TEMPLATES } from "../constants.js";
+import { getItemDescription, getItemIndex } from "../data/compendium-index.js";
+import { getActiveStore, getActiveStoreId } from "../data/stores.js";
+import { addWishlistItem, moveWishlistItemToCart, moveWishlistPlayerToCart, normalizeWishlistState, removePlayerFromWishlist, removeWishlistQuantity, wishlistTotal } from "../wishlist/model.js";
+import { DEFAULT_GM_FILTERS, DEFAULT_WISHLIST_STATE, MODULE_ID, SETTINGS, SOCKET_TYPES, TEMPLATES } from "../constants.js";
+import { GeneralStoreApplication, waitForDialog } from "./shared/application.js";
 import { GmFiltersApp } from "./gm-filters-app.js";
 import { StoreManagerApp } from "./store-manager-app.js";
 import { WishlistApp } from "./wishlist-app.js";
-const SELL_LOOT_FLAG_SCOPE = "world";
-const DEFAULT_DESCRIPTION_PLACEHOLDER =
-  '<p class="store-description__placeholder">Wähle ein Item aus, um die Beschreibung zu sehen.</p>';
+import { SellApp } from "./sell-app.js";
+
 let currentGmFilters = { ...DEFAULT_GM_FILTERS };
 let currentWishlistState = { ...DEFAULT_WISHLIST_STATE };
 let currentPlayerWishlistState = { ...DEFAULT_WISHLIST_STATE };
-const pendingWishlistMutationRequests = new Map();
-const WISHLIST_MUTATION_REQUEST_TIMEOUT_MS = 5000;
-const WISHLIST_OPTIONS_FLAG = "__wishlistOptions";
-function debounce(callback, delay = 250) {
-  let timeoutId;
-  return (...args) => {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-    timeoutId = setTimeout(() => callback(...args), delay);
-  };
+const pendingWishlistRequests = new Map();
+const persistentApps = new Map();
+
+const text = (key) => game.i18n.localize(key);
+const gold = (value) => `${Number(value || 0).toLocaleString()} gp`;
+const traitsOf = (entry) => Array.isArray(entry?.system?.traits?.value) ? entry.system.traits.value : [];
+const levelOf = (entry) => Number(entry?.system?.level?.value ?? entry?.system?.level ?? entry?.system?.rank?.value ?? entry?.system?.rank ?? 0);
+const priceOf = (entry) => Number(entry?.system?.price?.value?.gp ?? entry?.system?.price?.gp ?? entry?.system?.price?.value ?? entry?.system?.price ?? 0);
+const rarityOf = (entry) => String(entry?.system?.traits?.rarity ?? "").toLowerCase();
+const quantityOf = (item) => Math.max(1, Number(item?.system?.quantity ?? 1));
+const escape = (value) => foundry.utils.escapeHTML(String(value ?? ""));
+
+function partyActor() {
+  return game.actors?.party ?? game.actors?.find?.((actor) => actor.isOfType?.("party")) ?? null;
 }
 
-function getSpellCompendiumPacks() {
-  return game.packs.filter((pack) => pack.documentName === "Spell" || pack.documentName === "Item");
+function actorCoins(actor) {
+  return actor?.inventory?.coins ?? actor?.system?.currency ?? null;
 }
 
-const ALLOWED_ITEM_TYPES = new Set([
-  "equipment",
-  "weapon",
-  "shield",
-  "armor",
-  "consumable",
-  "treasure",
-  "backpack",
-]);
-
-function isAllowedItemEntry(entry) {
-  if (!entry) {
-    return false;
-  }
-  if (ALLOWED_ITEM_TYPES.has(entry.type)) {
-    return true;
-  }
-  return entry.system?.consumableType === "ammo";
+function currencyLabel(actor) {
+  const coins = actorCoins(actor);
+  return coins?.toString?.() ?? (coins ? gold((Number(coins.gp) || 0) + (Number(coins.sp) || 0) / 10 + (Number(coins.cp) || 0) / 100) : text("PF2EGeneralStore.Common.Unavailable"));
 }
 
-function getPriceInGold(entry) {
-  const priceData = entry.system?.price?.value ?? entry.system?.price;
-  if (typeof priceData === "number") {
-    return priceData;
-  }
-  if (typeof priceData?.gp === "number") {
-    return priceData.gp;
-  }
-  if (typeof priceData?.value?.gp === "number") {
-    return priceData.value.gp;
-  }
-  return 0;
+function worldWishlist() {
+  return normalizeWishlistState(game.settings.get(MODULE_ID, SETTINGS.WISHLIST) ?? currentWishlistState);
 }
 
-function formatGold(value) {
-  return Number.isFinite(value) ? value.toLocaleString() : "0";
+function playerWishlist() {
+  return normalizeWishlistState(game.settings.get(MODULE_ID, SETTINGS.WISHLIST_CLIENT) ?? currentPlayerWishlistState);
 }
 
-function normalizeTraits(traitsData) {
-  if (!traitsData) {
-    return [];
-  }
-  if (Array.isArray(traitsData)) {
-    return traitsData.filter((trait) => typeof trait === "string" && trait.trim());
-  }
-  if (Array.isArray(traitsData?.value)) {
-    return traitsData.value.filter(
-      (trait) => typeof trait === "string" && trait.trim()
-    );
-  }
-  return [];
+function wishlist() { return game.user?.isGM ? worldWishlist() : playerWishlist(); }
+
+async function setPlayerWishlist(state) {
+  currentPlayerWishlistState = normalizeWishlistState(state);
+  await game.settings.set(MODULE_ID, SETTINGS.WISHLIST_CLIENT, currentPlayerWishlistState);
 }
 
-function normalizeRarity(rarityValue) {
-  if (typeof rarityValue !== "string") {
-    return null;
-  }
-  const normalized = rarityValue.trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-  const allowedRarities = new Set(["common", "uncommon", "rare", "unique"]);
-  return allowedRarities.has(normalized) ? normalized : null;
+async function setWorldWishlist(state) {
+  currentWishlistState = normalizeWishlistState(state);
+  await game.settings.set(MODULE_ID, SETTINGS.WISHLIST, currentWishlistState);
+  game.socket?.emit(`module.${MODULE_ID}`, { type: SOCKET_TYPES.WISHLIST_UPDATE, state: currentWishlistState, total: wishlistTotal(currentWishlistState) });
 }
 
-function formatRarityLabel(rarity) {
-  switch (rarity) {
-    case "common":
-      return "Common";
-    case "uncommon":
-      return "Uncommon";
-    case "rare":
-      return "Rare";
-    case "unique":
-      return "Unique";
-    default:
-      return rarity ? rarity.charAt(0).toUpperCase() + rarity.slice(1) : "";
-  }
-}
-
-function normalizeGmFilters(filters = {}) {
-  const traits = Array.isArray(filters.traits) ? filters.traits : [];
-  const normalizedTraits = traits
-    .filter((trait) => typeof trait === "string")
-    .map((trait) => trait.trim())
-    .filter((trait) => trait.length > 0)
-    .map((trait) => trait.toLowerCase());
-
-  const minLevel = Number.isFinite(filters.minLevel)
-    ? filters.minLevel
-    : Number.isFinite(Number(filters.minLevel))
-      ? Number(filters.minLevel)
-      : null;
-  const maxLevel = Number.isFinite(filters.maxLevel)
-    ? filters.maxLevel
-    : Number.isFinite(Number(filters.maxLevel))
-      ? Number(filters.maxLevel)
-      : null;
-  const rarity = normalizeRarity(filters.rarity);
-
-  return {
-    traits: normalizedTraits,
-    minLevel,
-    maxLevel,
-    rarity,
-  };
-}
-
-function buildWishlistDialogItems(state, currentUserId) {
-  const wishlistState = normalizeWishlistState(state);
-  return Object.entries(wishlistState.items).map(([key, item]) => {
-    const players = Array.isArray(item.players)
-      ? item.players.map((player) => ({
-          name: player.name || "Unbekannter Spieler",
-          avatarSrc: player.tokenSrc || player.avatar || "",
-          quantity: player.quantity,
-        }))
-      : [];
-    const userEntry = Array.isArray(item.players)
-      ? item.players.find((player) => player.userId === currentUserId)
-      : null;
-    const totalValue = (Number(item.price) || 0) * (Number(item.quantity) || 0);
-    return {
-      key,
-      name: item.name,
-      quantity: item.quantity,
-      totalLabel: `${formatGold(totalValue)} gp`,
-      players,
-      canSelect: Boolean(userEntry && userEntry.quantity > 0),
-      selectQuantity: userEntry?.quantity ?? 0,
-    };
-  });
-}
-
-function isWishlistEmpty(state) {
-  const wishlistState = normalizeWishlistState(state);
-  return Object.keys(wishlistState.items).length === 0;
-}
-
-function getWorldWishlistState() {
-  return normalizeWishlistState(
-    game.settings?.get(MODULE_ID, SETTINGS.WISHLIST) ?? currentWishlistState
-  );
-}
-
-function getPlayerWishlistState() {
-  return normalizeWishlistState(
-    game.settings?.get(MODULE_ID, SETTINGS.WISHLIST_CLIENT) ?? currentPlayerWishlistState
-  );
-}
-
-function getWishlistState() {
-  if (game.user?.isGM) {
-    return getWorldWishlistState();
-  }
-  return getPlayerWishlistState();
-}
-
-async function setWorldWishlistState(state) {
-  const normalized = normalizeWishlistState(state);
-  currentWishlistState = normalized;
-  await game.settings.set(MODULE_ID, SETTINGS.WISHLIST, normalized);
-  game.socket?.emit(`module.${MODULE_ID}`, {
-    type: SOCKET_TYPES.WISHLIST_UPDATE,
-    state: normalized,
-    total: wishlistTotal(normalized),
-  });
-  return normalized;
-}
-
-async function setPlayerWishlistState(state) {
-  const normalized = normalizeWishlistState(state);
-  currentPlayerWishlistState = normalized;
-  await game.settings.set(MODULE_ID, SETTINGS.WISHLIST_CLIENT, normalized);
-  return normalized;
-}
-
-async function setWishlistState(state) {
-  if (game.user?.isGM) {
-    return setWorldWishlistState(state);
-  }
-  return setPlayerWishlistState(state);
-}
-
-function extractWishlistOptions(args) {
-  const lastArg = args.at(-1);
-  if (!lastArg || typeof lastArg !== "object" || Array.isArray(lastArg)) {
-    return { syncWithGm: false };
-  }
-  if (lastArg[WISHLIST_OPTIONS_FLAG] !== true) {
-    return { syncWithGm: false };
-  }
-  args.pop();
-  return { syncWithGm: Boolean(lastArg.syncWithGm) };
-}
-
-async function migratePlayerWishlistState() {
-  if (game.user?.isGM) {
-    return getPlayerWishlistState();
-  }
-  const playerState = getPlayerWishlistState();
-  const worldState = getWorldWishlistState();
-  if (!isWishlistEmpty(playerState) || isWishlistEmpty(worldState)) {
-    return playerState;
-  }
-  return setPlayerWishlistState(worldState);
-}
-
-const WISHLIST_MUTATIONS = {
-  addItem: addWishlistItem,
-  removeItem: removeWishlistItem,
-  removeQuantity: removeWishlistQuantity,
-  setQuantity: setWishlistItemQuantity,
-  moveToCart: moveWishlistItemToCart,
-  movePlayerToCart: moveWishlistPlayerToCart,
-  removePlayerFromWishlist,
-};
-
-function getWishlistMutation(type) {
-  const mutation = WISHLIST_MUTATIONS[type];
-  return typeof mutation === "function" ? mutation : null;
-}
-
-function getWishlistMutationRequestId() {
-  if (typeof foundry?.utils?.randomID === "function") {
-    return foundry.utils.randomID();
-  }
-  if (typeof randomID === "function") {
-    return randomID();
-  }
-  return Math.random().toString(36).slice(2);
-}
-
-async function applyWishlistMutationAsGm(type, ...args) {
-  const mutation = getWishlistMutation(type);
-  if (!mutation) {
-    return null;
-  }
-  const result = mutation(getWishlistState(), ...args);
-  await setWishlistState(result.state);
+async function mutateWishlist(type, ...args) {
+  const mutation = { addItem: addWishlistItem, moveToCart: moveWishlistItemToCart, movePlayerToCart: moveWishlistPlayerToCart, removePlayerFromWishlist, removeQuantity: removeWishlistQuantity }[type];
+  if (!mutation) return null;
+  const result = mutation(wishlist(), ...args);
+  await (game.user?.isGM ? setWorldWishlist(result.state) : setPlayerWishlist(result.state));
   return result;
 }
 
-function requestWishlistMutation(type, args) {
-  if (!game.socket) return Promise.resolve(null);
-  const requestId = getWishlistMutationRequestId();
-  const payload = buildWishlistMutationPayload(type, args, { requestId, userId: game.user?.id });
+function requestGmMutation(type, args) {
+  const requestId = foundry.utils.randomID();
+  const payload = buildWishlistMutationPayload(type, args, { requestId, userId: game.user.id });
   if (!payload) return Promise.resolve(null);
   return new Promise((resolve) => {
-    const timeoutId = setTimeout(() => { pendingWishlistMutationRequests.delete(requestId); resolve(null); }, WISHLIST_MUTATION_REQUEST_TIMEOUT_MS);
-    pendingWishlistMutationRequests.set(requestId, { resolve, timeoutId });
+    const timeout = setTimeout(() => { pendingWishlistRequests.delete(requestId); resolve(null); }, 5000);
+    pendingWishlistRequests.set(requestId, { resolve, timeout });
     game.socket.emit(`module.${MODULE_ID}`, payload);
   });
 }
 
-async function applyWishlistMutation(type, ...args) {
-  const { syncWithGm } = extractWishlistOptions(args);
-  if (game.user?.isGM) {
-    return applyWishlistMutationAsGm(type, ...args);
-  }
-  const mutation = getWishlistMutation(type);
-  if (!mutation) {
-    return null;
-  }
-  const result = mutation(getWishlistState(), ...args);
-  await setPlayerWishlistState(result.state);
-  if (syncWithGm) {
-    void requestWishlistMutation(type, args);
-  }
-  return result;
-}
-
-function normalizeLevel(levelData) {
-  const levelValue = levelData?.value ?? levelData;
-  return Number.isFinite(levelValue) ? levelValue : null;
-}
-
-function getEntryLevel(entry) {
-  return normalizeLevel(entry?.system?.level ?? entry?.system?.rank);
-}
-
-function isSpellRitual(entry) {
-  const ritualValue = entry?.system?.ritual;
-  if (typeof ritualValue === "boolean") {
-    return ritualValue;
-  }
-  if (typeof ritualValue?.value === "boolean") {
-    return ritualValue.value;
-  }
-  return false;
-}
-
-function parseTraitsInput(value) {
-  if (!value) {
-    return [];
-  }
-  return value
-    .split(/[,;]+/)
-    .map((trait) => trait.trim())
-    .filter((trait) => trait.length > 0)
-    .map((trait) => trait.toLowerCase());
-}
-
-function formatTraitsInput(traits) {
-  if (!Array.isArray(traits)) {
-    return "";
-  }
-  return traits.join(", ");
-}
-
-function getCurrentGmFilters() {
-  return normalizeGmFilters(
-    game.settings?.get(MODULE_ID, SETTINGS.GM_FILTERS) ?? currentGmFilters
-  );
-}
-
-async function setCurrentGmFilters(filters) {
-  const normalized = normalizeGmFilters(filters);
-  currentGmFilters = normalized;
-  await game.settings.set(MODULE_ID, SETTINGS.GM_FILTERS, normalized);
-  game.socket?.emit(`module.${MODULE_ID}`, {
-    type: "gmFiltersUpdate",
-    filters: normalized,
+function wishlistRows(state, userId) {
+  return Object.entries(normalizeWishlistState(state).items).map(([key, item]) => {
+    const own = item.players?.find((player) => player.userId === userId);
+    return { key, name: item.name, quantity: item.quantity, totalLabel: gold(item.price * item.quantity), canSelect: game.user.isGM || Boolean(own?.quantity), selectQuantity: game.user.isGM ? item.quantity : own?.quantity, players: (item.players ?? []).map((player) => ({ ...player, avatarSrc: player.tokenSrc || player.avatar })) };
   });
-  refreshOpenStoreDialogs();
 }
 
-
-function getCurrentShopLogo(fallback = "") {
-  const configured = game.settings?.get(MODULE_ID, SETTINGS.SHOP_LOGO) ?? "";
-  const value = typeof configured === "string" ? configured.trim() : "";
-  return value || fallback || "";
-}
-
-function formatActiveStoreLabel(store) {
-  if (!store) return "Kein Shop gewählt";
-  const name = store.name ?? "Unbenannter Shop";
-  const kind = store.kind === "npc" ? "NPC" : store.kind === "settlement" ? "Settlement" : null;
-  return kind ? `${name} (${kind})` : name;
-}
-
-function getEffectiveShopFilters() {
-  const store = getActiveStore();
-  if (store?.filters) return normalizeGmFilters(store.filters);
-  return getCurrentGmFilters();
-}
-
-function generateStoreId() {
-  try {
-    const rid = foundry?.utils?.randomID?.(16);
-    if (typeof rid === "string" && rid.length) return rid;
-  } catch (_err) {}
-  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function escapeHtmlSafe(value) {
-  const str = value == null ? "" : String(value);
-  try {
-    return foundry?.utils?.escapeHTML ? foundry.utils.escapeHTML(str) : str;
-  } catch (_err) {
-    return str;
-  }
-}
-
-function isLegacyItem(entry) {
-  const legacyFlag = entry?.flags?.pf2e?.legacy;
-  if (legacyFlag === true) {
-    return true;
-  }
-
-  const remasterFlag = entry?.system?.publication?.remaster ?? entry?.system?.remaster;
-  if (remasterFlag === true) {
-    return false;
-  }
-  if (remasterFlag === false) {
-    return true;
-  }
-
-  const source = entry?.system?.publication?.title ?? entry?.system?.source?.value ?? "";
-  if (typeof source === "string" && source.toLowerCase().includes("legacy")) {
-    return true;
-  }
-
-  return false;
-}
-
-const MIN_SEARCH_LENGTH = 2;
-const MAX_SEARCH_RESULTS = 100;
-const SEARCH_RESULTS_INCREMENT = 100;
-const SEARCH_RENDER_BATCH_SIZE = 50;
-
-function renderSearchResults(results, listElement) {
-  const renderToken = (listElement.data("renderToken") ?? 0) + 1;
-  listElement.data("renderToken", renderToken);
-  listElement.empty();
-  if (!results.length) {
-    listElement.append('<li class="placeholder">Keine Ergebnisse.</li>');
-    return;
-  }
-
-  const buildResultHtml = (result) => {
-    const entryType = result.entryType ?? "item";
-    const isSpell = entryType === "spell";
-    const traitsValue = (result.traits ?? []).join("|");
-    const icon =
-      result.icon ?? (isSpell ? "icons/svg/book.svg" : "icons/svg/item-bag.svg");
-    const levelLabel = isSpell ? "Rank" : "Level";
-    return `
-      <li class="store-result" data-item-id="${result.itemId}">
-        <button
-          class="store-result__button"
-          type="button"
-          data-pack="${result.pack}"
-          data-item-id="${result.itemId}"
-          data-entry-type="${entryType}"
-          data-name="${result.name}"
-          data-price="${result.priceGold}"
-          data-icon="${icon}"
-          data-level="${result.level ?? ""}"
-          data-rarity="${result.rarity ?? ""}"
-          data-legacy="${result.isLegacy ? "true" : "false"}"
-          data-traits="${traitsValue}"
-        >
-          <img class="store-result__icon" src="${icon}" alt="" />
-          <span class="store-result__details">
-            <span class="store-result__name">${result.name}</span>
-            <span class="store-result__level">${levelLabel} ${result.level ?? "–"}</span>
-            ${result.isLegacy ? '<span class="store-result__legacy">Legacy</span>' : ""}
-            ${
-              result.rarity
-                ? `<span class="store-result__rarity store-result__rarity--${result.rarity}">${formatRarityLabel(
-                    result.rarity
-                  )}</span>`
-                : ""
-            }
-            ${
-              result.traits?.length
-                ? `<span class="store-result__traits">${result.traits
-                    .map((trait) => `<span class="store-result__trait">${trait}</span>`)
-                    .join("")}</span>`
-                : ""
-            }
-          </span>
-          <span class="store-result__price">${formatGold(result.priceGold)} gp</span>
-        </button>
-      </li>
-    `;
+async function openWishlist(owner) {
+  const app = WishlistApp.getOpenInstance() ?? new WishlistApp();
+  const refresh = () => {
+    const state = wishlist();
+    const available = partyActor() ? currencyLabel(partyActor()) : text("PF2EGeneralStore.Common.Unavailable");
+    app.viewModel = { items: wishlistRows(state, game.user.id), partyGold: available, totalValue: gold(wishlistTotal(state)), remainingValue: available };
   };
-
-  const renderBatch = (startIndex) => {
-    if (listElement.data("renderToken") !== renderToken) {
-      return;
+  refresh();
+  app.onRemoveSelected = async (selections) => {
+    for (const selection of selections) {
+      if (game.user.isGM) await mutateWishlist("removeQuantity", selection.key, selection.quantity);
+      else {
+        await mutateWishlist("removePlayerFromWishlist", selection.key, game.user.id, selection.quantity);
+        void requestGmMutation("removePlayerFromWishlist", [selection.key, game.user.id, selection.quantity]);
+      }
     }
-    const slice = results.slice(startIndex, startIndex + SEARCH_RENDER_BATCH_SIZE);
-    const itemsHtml = slice.map(buildResultHtml).join("");
-    listElement.append(itemsHtml);
-    const nextIndex = startIndex + SEARCH_RENDER_BATCH_SIZE;
-    if (nextIndex < results.length) {
-      requestAnimationFrame(() => renderBatch(nextIndex));
-    }
+    refresh(); await app.render();
   };
-
-  if (results.length <= SEARCH_RENDER_BATCH_SIZE) {
-    listElement.append(results.map(buildResultHtml).join(""));
-    return;
-  }
-
-  renderBatch(0);
-}
-
-function updateSearchHint(listElement, message, options = {}) {
-  const dialog = listElement.closest(".pf2e-general-store-dialog");
-  const hintElement = dialog.find("[data-search-hint]");
-  if (!hintElement.length) {
-    return;
-  }
-  const isAlphabeticalSort = options?.isAlphabeticalSort ?? false;
-  const showMoreButton = options?.showMoreButton ?? false;
-  const hintMessage = [
-    message ?? "",
-    isAlphabeticalSort ? "Alphabetisch sortiert." : null,
-  ]
-    .filter(Boolean)
-    .join(" ");
-  hintElement.text(hintMessage);
-  const moreButton = dialog.find(".store-results__more");
-  if (moreButton.length) {
-    moreButton.toggleClass("is-hidden", !showMoreButton);
-  }
-}
-
-function getResultLimit(listElement) {
-  const rawLimit = Number(listElement.data("resultLimit"));
-  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : MAX_SEARCH_RESULTS;
-  if (!Number.isFinite(rawLimit) || rawLimit <= 0) {
-    listElement.data("resultLimit", limit);
-  }
-  return limit;
-}
-
-function getDescriptionContainer(listElement) {
-  const dialog = listElement.closest(".pf2e-general-store-dialog");
-  return dialog.find(".store-description__content");
-}
-
-function resetResultSelection(listElement) {
-  listElement.find(".store-result__button.selected").removeClass("selected");
-  const descriptionContainer = getDescriptionContainer(listElement);
-  if (descriptionContainer.length) {
-    descriptionContainer.data("activeDescriptionKey", null);
-    descriptionContainer.html(DEFAULT_DESCRIPTION_PLACEHOLDER);
-  }
-}
-
-function entryMatchesGmFilters(entry, filters) {
-  const normalizedFilters = normalizeGmFilters(filters);
-  if (normalizedFilters.traits.length) {
-    const entryTraits = normalizeTraits(entry.system?.traits).map((trait) =>
-      trait.toLowerCase()
-    );
-    const hasAllTraits = normalizedFilters.traits.every((trait) =>
-      entryTraits.includes(trait)
-    );
-    if (!hasAllTraits) {
-      return false;
+  app.onMoveToCart = async (selections) => {
+    for (const selection of selections) {
+      const moved = game.user.isGM
+        ? await mutateWishlist("moveToCart", selection.key, selection.quantity)
+        : await mutateWishlist("movePlayerToCart", selection.key, game.user.id, selection.quantity);
+      if (!moved?.moved) continue;
+      await owner?.addWishlistItem?.(moved.moved);
+      if (!game.user.isGM) void requestGmMutation("removePlayerFromWishlist", [selection.key, game.user.id, moved.moved.quantity]);
     }
-  }
-
-  const level = getEntryLevel(entry);
-  if (normalizedFilters.minLevel !== null) {
-    if (level === null || level < normalizedFilters.minLevel) {
-      return false;
-    }
-  }
-  if (normalizedFilters.maxLevel !== null) {
-    if (level === null || level > normalizedFilters.maxLevel) {
-      return false;
-    }
-  }
-  if (normalizedFilters.rarity) {
-    const entryRarity = normalizeRarity(entry.system?.traits?.rarity);
-    if (entryRarity !== normalizedFilters.rarity) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function entryMatchesItemType(entry, selectedItemType) {
-  if (!selectedItemType) {
-    return true;
-  }
-  if (selectedItemType === "ammo") {
-    return (
-      entry.type === "consumable" &&
-      entry.system?.consumableType === "ammo"
-    );
-  }
-  return entry.type === selectedItemType;
-}
-
-function refreshOpenStoreDialogs() {
-  const activeDialogs = document.querySelectorAll(".pf2e-general-store-dialog");
-  if (!activeDialogs.length) {
-    return;
-  }
-  const filters = getEffectiveShopFilters();
-  const storeLabel = formatActiveStoreLabel(getActiveStore());
-  const logoSrc = getCurrentShopLogo("");
-  activeDialogs.forEach((dialog) => {
-    const searchInput = dialog.querySelector('input[name="store-search"]');
-    const resultsList = dialog.querySelector(".store-results ul");
-    if (!searchInput || !resultsList) {
-      return;
-    }
-    const labelTarget = dialog.querySelector("[data-active-store-label]");
-    if (labelTarget) labelTarget.textContent = storeLabel;
-    void updateSearchResults(searchInput.value ?? "", $(resultsList), filters);
-  });
-}
-
-function renderSearchLoading(listElement) {
-  listElement.empty();
-  listElement.append('<li class="placeholder">Index wird geladen...</li>');
-}
-
-async function updateSearchResults(query, listElement, gmFiltersOverride) {
-  const dialog = listElement.closest(".pf2e-general-store-dialog");
-  const spellFilter = dialog.find('input[name="filter-spell"]');
-  const itemFilter = dialog.find('input[name="filter-item"]');
-  const itemTypeFilter = dialog.find('select[name="filter-item-type"]');
-  const sortAlphaFilter = dialog.find('input[name="filter-sort-alpha"]');
-  const selectedItemType = itemTypeFilter.length
-    ? itemTypeFilter.val() ?? ""
-    : "";
-  const itemTypeLabel = itemTypeFilter.length
-    ? itemTypeFilter.find(`option[value="${selectedItemType}"]`).text() || "Alle"
-    : "Alle";
-  const hasSpellFilter = spellFilter.length ? spellFilter.prop("checked") : false;
-  const hasItemFilter = itemFilter.length ? itemFilter.prop("checked") : false;
-  const isAlphabeticalSort = sortAlphaFilter.length
-    ? sortAlphaFilter.prop("checked")
-    : false;
-  const showSpells = hasSpellFilter || (!hasSpellFilter && !hasItemFilter);
-  const showItems = hasItemFilter || (!hasSpellFilter && !hasItemFilter);
-  const noSpellPacksAvailable =
-    hasSpellFilter && getSpellCompendiumPacks().length === 0;
-
-  const searchTerm = query.trim().toLowerCase();
-  const hasSearchTerm = searchTerm.length > 0;
-  if (hasSearchTerm && searchTerm.length < MIN_SEARCH_LENGTH) {
-    renderSearchResults([], listElement);
-    resetResultSelection(listElement);
-    updateSearchHint(
-      listElement,
-      `Bitte mindestens ${MIN_SEARCH_LENGTH} Zeichen eingeben.`,
-      { isAlphabeticalSort }
-    );
-    return;
-  }
-
-  const gmFilters = gmFiltersOverride ?? getCurrentGmFilters();
-  const itemEntriesPromise = showItems
-    ? getItemIndex()
-    : Promise.resolve([]);
-  const spellEntriesPromise = showSpells
-    ? getItemIndex({ spells: true })
-    : Promise.resolve([]);
-  if (
-    (showItems && !hasItemIndex()) ||
-    (showSpells && !hasItemIndex({ spells: true }))
-  ) {
-    renderSearchLoading(listElement);
-    resetResultSelection(listElement);
-    updateSearchHint(listElement, "", { isAlphabeticalSort });
-  }
-
-  const [itemEntries, spellEntries] = await Promise.all([
-    itemEntriesPromise,
-    spellEntriesPromise,
-  ]);
-
-  const itemResults = itemEntries
-    .filter(({ entry }) => isAllowedItemEntry(entry))
-    .filter(({ entry }) => entryMatchesItemType(entry, selectedItemType))
-    .filter(({ entry }) => entryMatchesGmFilters(entry, gmFilters))
-    .filter(({ entry }) =>
-      hasSearchTerm ? entry.name?.toLowerCase().includes(searchTerm) : true
-    )
-    .map(({ entry, pack }) => ({
-      entryType: "item",
-      icon: entry.img ?? "icons/svg/item-bag.svg",
-      name: entry.name ?? "",
-      priceGold: getPriceInGold(entry),
-      traits: normalizeTraits(entry.system?.traits),
-      level: getEntryLevel(entry),
-      rarity: normalizeRarity(entry.system?.traits?.rarity),
-      isLegacy: isLegacyItem(entry),
-      pack: pack.collection,
-      itemId: entry._id,
-    }));
-
-  const spellResults = spellEntries
-    .filter(({ entry }) => !isSpellRitual(entry))
-    .filter(({ entry }) => entryMatchesGmFilters(entry, gmFilters))
-    .filter(({ entry }) =>
-      hasSearchTerm ? entry.name?.toLowerCase().includes(searchTerm) : true
-    )
-    .map(({ entry, pack }) => ({
-      entryType: "spell",
-      icon: entry.img ?? "icons/svg/book.svg",
-      name: entry.name ?? "",
-      priceGold: getPriceInGold(entry),
-      traits: normalizeTraits(entry.system?.traits),
-      level: getEntryLevel(entry),
-      rarity: normalizeRarity(entry.system?.traits?.rarity),
-      isLegacy: isLegacyItem(entry),
-      pack: pack.collection,
-      itemId: entry._id,
-    }));
-
-  const results = [...itemResults, ...spellResults];
-  if (isAlphabeticalSort) {
-    results.sort((a, b) =>
-      a.name.localeCompare(b.name, game.i18n?.lang ?? "de")
-    );
-  }
-
-  const resultLimit = getResultLimit(listElement);
-  const isTruncated = results.length > resultLimit;
-  const limitedResults = isTruncated ? results.slice(0, resultLimit) : results;
-
-  renderSearchResults(limitedResults, listElement);
-  resetResultSelection(listElement);
-  updateSearchHint(
-    listElement,
-    [
-      noSpellPacksAvailable
-        ? "Keine Spell-Compendien verfügbar/zugänglich."
-        : null,
-      !hasSearchTerm
-        ? [
-            showItems ? `Treffer ${itemTypeLabel}: ${itemResults.length}` : null,
-            showSpells ? `Treffer Spells: ${spellResults.length}` : null,
-          ]
-            .filter(Boolean)
-            .join(" | ")
-        : null,
-      isTruncated
-        ? `Zeige erste ${resultLimit} Treffer. Bitte Suche weiter eingrenzen.`
-        : null,
-    ]
-      .filter(Boolean)
-      .join(" "),
-    { isAlphabeticalSort, showMoreButton: isTruncated }
-  );
-}
-
-function getCurrencyInCopper(currency = {}) {
-  const pp = Number(currency.pp) || 0;
-  const gp = Number(currency.gp) || 0;
-  const sp = Number(currency.sp) || 0;
-  const cp = Number(currency.cp) || 0;
-  return pp * 1000 + gp * 100 + sp * 10 + cp;
-}
-
-function hasCurrencyValues(currency) {
-  if (!currency || typeof currency !== "object") {
-    return false;
-  }
-  if (typeof CoinsPF2e !== "undefined" && currency instanceof CoinsPF2e) {
-    return true;
-  }
-  return ["pp", "gp", "sp", "cp"].some(
-    (key) => key in currency || Number.isFinite(currency[key])
-  );
-}
-
-function getActorCurrency(actor) {
-  const inventoryCurrency = actor?.inventory?.currency;
-  if (hasCurrencyValues(inventoryCurrency)) {
-    return { currency: inventoryCurrency, path: "system.currency" };
-  }
-  const directCurrency = actor?.system?.currency;
-  if (hasCurrencyValues(directCurrency)) {
-    return { currency: directCurrency, path: "system.currency" };
-  }
-  if (hasCurrencyValues(directCurrency?.value)) {
-    return { currency: directCurrency.value, path: "system.currency.value" };
-  }
-  return { currency: null, path: null };
-}
-
-function splitCopper(totalCopper) {
-  const remaining = Math.max(0, Math.floor(totalCopper));
-  const pp = Math.floor(remaining / 1000);
-  const gp = Math.floor((remaining % 1000) / 100);
-  const sp = Math.floor((remaining % 100) / 10);
-  const cp = remaining % 10;
-  return { pp, gp, sp, cp };
-}
-
-function getCurrencyUpdate(actor, costGold) {
-  const costCopper = Math.round(costGold * 100);
-  if (!actor?.inventory?.removeCurrency) {
-    return { ok: false, reason: "missing-inventory" };
-  }
-  const { currency } = getActorCurrency(actor);
-  const availableCopper =
-    actor?.inventory?.currency?.copperValue ?? getCurrencyInCopper(currency ?? {});
-  if (!Number.isFinite(availableCopper)) {
-    return { ok: false, reason: "missing-currency" };
-  }
-  if (availableCopper < costCopper) {
-    return { ok: false, reason: "insufficient-funds" };
-  }
-  return { ok: true, costCopper, costCoins: splitCopper(costCopper) };
-}
-
-function formatCurrencyDisplay(currency) {
-  if (!currency) {
-    return null;
-  }
-  const totalCopper = getCurrencyInCopper(currency);
-  const { pp, gp, sp, cp } = splitCopper(totalCopper);
-  const parts = [];
-  if (pp) {
-    parts.push(`${pp} pp`);
-  }
-  if (gp) {
-    parts.push(`${gp} gp`);
-  }
-  if (sp) {
-    parts.push(`${sp} sp`);
-  }
-  if (cp || parts.length === 0) {
-    parts.push(`${cp} cp`);
-  }
-  return parts.join(" ");
-}
-
-function formatCurrencyInGold(currency) {
-  if (!currency) {
-    return null;
-  }
-  const totalCopper = getCurrencyInCopper(currency);
-  return `${formatGold(totalCopper / 100)} gp`;
-}
-
-function getPartyStashActor() {
-  if (game.party) {
-    return game.party;
-  }
-  if (game.actors?.party) {
-    return game.actors.party;
-  }
-  return game.actors?.find((actor) => actor.type === "party") ?? null;
-}
-
-async function deductCurrency(actor, costGold) {
-  if (!actor?.inventory?.removeCurrency) {
-    const actorName = actor?.name ?? "Unbekannter Actor";
-    const message = `Kein unterstütztes Inventory für ${actorName} gefunden.`;
-    ui.notifications.warn(message);
-    console.warn(message, actor);
-    return { ok: false, reason: "missing-inventory" };
-  }
-  const update = getCurrencyUpdate(actor, costGold);
-  if (!update.ok) {
-    return update;
-  }
-  await pay(actor, Math.round(costGold * 100));
-  return { ok: true };
-}
-
-async function handlePurchase({ actor, packCollection, itemId, name, priceGold, quantity, useActor, useParty }) {
-  const pack = game.packs.get(packCollection);
-  const item = await pack?.getDocument(itemId);
-  const paymentActor = useActor ? actor : useParty ? getPartyStashActor() : null;
-  if (!actor?.isOwner || !item || !paymentActor) {
-    ui.notifications.error(game.i18n.localize("PF2EGeneralStore.Errors.InvalidPurchase"));
-    return;
-  }
-  const authoritativeGold = getPriceInGold(item);
-  if (Math.abs(authoritativeGold - Number(priceGold)) > 0.001) {
-    ui.notifications.warn(game.i18n.localize("PF2EGeneralStore.Errors.PriceChanged"));
-    return;
-  }
-  try {
-    const result = await purchaseItem({
-      buyer: actor,
-      paymentActor,
-      packId: packCollection,
-      itemId,
-      quantity: Number(quantity),
-      expectedPriceCopper: Math.round(authoritativeGold * 100),
-      storeId: getActiveStoreId(),
-    });
-    if (!result.ok) {
-      if (result.reason === "price-changed") {
-        ui.notifications.warn(game.i18n.localize("PF2EGeneralStore.Errors.PriceChanged"));
-        return;
-      }
-      ui.notifications.warn(game.i18n.localize("PF2EGeneralStore.Errors.InsufficientFunds"));
-      return;
-    }
-    ui.notifications.info(game.i18n.format("PF2EGeneralStore.Store.Purchased", { name }));
-  } catch (error) {
-    console.error(`[${MODULE_ID}] Purchase failed`, { actorId: actor.id, itemId, storeId: getActiveStoreId(), error });
-    ui.notifications.error(game.i18n.localize("PF2EGeneralStore.Errors.PurchaseFailed"));
-  }
-}
-
-function openPurchaseDialog({ actor, packCollection, itemId, name, priceGold }) {
-  const { currency: actorCurrency } = getActorCurrency(actor);
-  const actorCurrencyDisplay = formatCurrencyInGold(actorCurrency);
-  const partyActor = getPartyStashActor();
-  const { currency: partyCurrency } = getActorCurrency(partyActor);
-  const partyCurrencyDisplay = partyActor ? formatCurrencyInGold(partyCurrency) : null;
-  const partyAvailability = partyActor
-    ? partyCurrencyDisplay ?? "Nicht verfügbar"
-    : "Nicht verfügbar";
-  const actorAvailability = actorCurrencyDisplay ?? "Nicht verfügbar";
-  const actorName = actor?.name ?? "Unbekannter Actor";
-  const content = `
-    <form class="pf2e-general-store-purchase">
-      <p class="purchase-title">${name}</p>
-      <p class="purchase-price">${formatGold(priceGold)} gp</p>
-      <div class="form-group">
-        <label for="pf2e-general-store-quantity">Menge</label>
-        <input id="pf2e-general-store-quantity" type="number" name="quantity" min="1" value="1" />
-      </div>
-      <fieldset class="form-group">
-        <legend>Zahlungsquelle</legend>
-        <label class="store-option">
-          <span class="store-option__row">
-            <input type="checkbox" name="payment-actor" />
-            <span>${actorName}</span>
-          </span>
-          <span class="store-option__availability">Verfügbar: ${actorAvailability}</span>
-        </label>
-        <label class="store-option">
-          <span class="store-option__row">
-            <input type="checkbox" name="payment-party" />
-            <span>Party-Stash</span>
-          </span>
-          <span class="store-option__availability">Verfügbar: ${partyAvailability}</span>
-        </label>
-      </fieldset>
-    </form>
-  `;
-
-  const dialog = new Dialog(
-    {
-      title: "Kauf bestätigen",
-      content,
-      buttons: {
-        buy: {
-          label: "Kaufen",
-          callback: (html) => {
-            const form = html[0]?.querySelector("form");
-            if (!form) {
-              return false;
-            }
-            const quantity = Number(form.elements.quantity?.value);
-            const useActor = form.elements["payment-actor"]?.checked ?? false;
-            const useParty = form.elements["payment-party"]?.checked ?? false;
-
-            if (!Number.isFinite(quantity) || quantity < 1) {
-              ui.notifications.warn("Bitte gib eine gültige Menge an.");
-              return false;
-            }
-
-            if (!useActor && !useParty) {
-              ui.notifications.warn("Bitte wähle eine Zahlungsquelle aus.");
-              return false;
-            }
-
-            if (useActor && useParty) {
-              ui.notifications.warn("Bitte wähle genau eine Zahlungsquelle aus.");
-              return false;
-            }
-
-            void handlePurchase({
-              actor,
-              packCollection,
-              itemId,
-              name,
-              priceGold,
-              quantity,
-              useActor,
-              useParty,
-            });
-
-            return true;
-          },
-        },
-        close: {
-          label: "Abbrechen",
-        },
-      },
-      default: "buy",
-    },
-    {
-      width: 520,
-      height: 420,
-    }
-  );
-
-  dialog.render(true);
-}
-
-function buildCartItemDetailsHtml(item) {
-  const traits = Array.isArray(item.traits) ? item.traits : [];
-  const isSpell = item.entryType === "spell";
-  const levelLabel = isSpell ? item.rank ?? "–" : item.level ?? "–";
-  const levelTitle = isSpell ? "Rank" : "Level";
-  const legacyHtml = item.isLegacy
-    ? '<span class="store-result__legacy">Legacy</span>'
-    : "";
-  const rarityHtml = item.rarity
-    ? `<span class="store-result__rarity store-result__rarity--${item.rarity}">${formatRarityLabel(
-        item.rarity
-      )}</span>`
-    : "";
-  const traitsHtml = traits.length
-    ? `<span class="store-result__traits">${traits
-        .map((trait) => `<span class="store-result__trait">${trait}</span>`)
-        .join("")}</span>`
-    : "";
-  const icon =
-    item.icon ?? (isSpell ? "icons/svg/book.svg" : "icons/svg/item-bag.svg");
-  return `
-    <div class="cart-dialog__item-info">
-      <img class="store-result__icon" src="${icon}" alt="" />
-      <span class="store-result__details">
-        <span class="store-result__name">${item.name}</span>
-        <span class="store-result__level">${levelTitle} ${levelLabel}</span>
-        ${legacyHtml}
-        ${rarityHtml}
-        ${traitsHtml}
-      </span>
-    </div>
-  `;
-}
-
-function buildCartDialogItemsHtml(items) {
-  if (!items.length) {
-    return '<li class="cart-dialog__placeholder">Keine Items im Warenkorb.</li>';
-  }
-  return items
-    .map(
-      (item) => `
-        <li class="cart-dialog__item" data-item-key="${item.key}">
-          ${buildCartItemDetailsHtml(item)}
-          <input class="cart-dialog__qty" type="number" min="1" value="${item.quantity}" />
-          <span class="cart-dialog__total">${formatGold(
-            getCartItemPrice(item) * item.quantity
-          )} gp</span>
-          <button class="cart-dialog__remove" type="button" aria-label="Item entfernen">
-            ×
-          </button>
-        </li>
-      `
-    )
-    .join("");
-}
-
-function buildCartDialogContent({
-  actorName,
-  actorAvailability,
-  partyAvailability,
-  items,
-  total,
-  itemsHtml,
-}) {
-  const listHtml = itemsHtml ?? buildCartDialogItemsHtml(items);
-  return `
-    <form class="pf2e-general-store-cart-dialog">
-      <ul class="cart-dialog__items">
-        ${listHtml}
-      </ul>
-      <div class="cart-dialog__summary">
-        Gesamt: <span data-cart-dialog-total>${formatGold(total)} gp</span>
-      </div>
-      <fieldset class="form-group">
-        <legend>Zahlungsquelle</legend>
-        <label class="store-option">
-          <span class="store-option__row">
-            <input type="checkbox" name="payment-actor" />
-            <span>${actorName}</span>
-          </span>
-          <span class="store-option__availability">Verfügbar: ${actorAvailability}</span>
-        </label>
-        <label class="store-option">
-          <span class="store-option__row">
-            <input type="checkbox" name="payment-party" />
-            <span>Party-Stash</span>
-          </span>
-          <span class="store-option__availability">Verfügbar: ${partyAvailability}</span>
-        </label>
-      </fieldset>
-    </form>
-  `;
-}
-
-async function buildCartItemFromWishlistItem(item) {
-  const pack = game.packs.get(item.pack);
-  let icon = "icons/svg/item-bag.svg";
-  let traits = [];
-  let rarity = null;
-  let level = null;
-  let isLegacy = false;
-  let entryType = item.entryType === "spell" ? "spell" : "item";
-  if (entryType === "spell") {
-    icon = "icons/svg/book.svg";
-  }
-
-  if (pack) {
-    const document = await pack.getDocument(item.itemId);
-    if (document) {
-      icon = document.img ?? icon;
-      traits = normalizeTraits(document.system?.traits);
-      rarity = normalizeRarity(document.system?.traits?.rarity);
-      level = getEntryLevel(document);
-      isLegacy = isLegacyItem(document);
-      entryType = pack.documentName === "Spell" ? "spell" : entryType;
-    }
-  }
-
-  return {
-    itemId: item.itemId,
-    pack: item.pack,
-    name: item.name,
-    icon,
-    traits,
-    rarity,
-    level,
-    isLegacy,
-    entryType,
-    price: item.price,
+    refresh(); await app.render(); owner?.render();
   };
+  return app.render({ force: true });
 }
 
-function getCartItemPrice(item) {
-  if (!item) {
-    return 0;
-  }
-  const storedPrice = Number(item.price);
-  if (Number.isFinite(storedPrice) && storedPrice > 0) {
-    return storedPrice;
-  }
-  if (item.entryType === "spell") {
-    const consumablePrice = getSpellConsumablePrice(item.consumableType, item.rank);
-    if (Number.isFinite(consumablePrice) && consumablePrice > 0) {
-      return consumablePrice;
-    }
-  }
-  return Number(item.price) || 0;
+async function choose({ title, content, confirm = "PF2EGeneralStore.Common.Select" }) {
+  return waitForDialog({ title, content, buttons: [
+    { action: "confirm", label: text(confirm), callback: (form) => form ? new FormData(form) : null },
+    { action: "cancel", label: text("PF2EGeneralStore.Common.Cancel"), callback: () => null },
+  ], default: "confirm" });
 }
 
-async function handleCartCheckout({ actor, items, useActor, useParty }) {
-  if (!actor) {
-    ui.notifications.error("Kein gültiger Actor ausgewählt.");
-    return { ok: false };
-  }
-  if (!Array.isArray(items) || !items.length) {
-    ui.notifications.warn("Der Warenkorb ist leer.");
-    return { ok: false };
-  }
-  if (!useActor && !useParty) {
-    ui.notifications.warn("Bitte wähle eine Zahlungsquelle aus.");
-    return { ok: false };
-  }
-  if (useActor && useParty) {
-    ui.notifications.warn("Bitte wähle genau eine Zahlungsquelle aus.");
-    return { ok: false };
-  }
-
-  let paymentActor = null;
-  if (useActor) {
-    paymentActor = actor;
-  } else if (useParty) {
-    paymentActor = getPartyStashActor();
-    if (!paymentActor) {
-      ui.notifications.error("Kein Party-Stash gefunden.");
-      return { ok: false };
-    }
-  }
-
-  const itemDocuments = new Map();
-  for (const item of items) {
-    if (item.entryType === "spell") {
-      if (!item.consumableSource) {
-        ui.notifications.error(
-          `Keine Consumable-Quelle für ${item.name ?? "Spell"} vorhanden.`
-        );
-        return { ok: false };
-      }
-      continue;
-    }
-    const pack = game.packs.get(item.pack);
-    if (!pack) {
-      ui.notifications.error("Compendium nicht gefunden.");
-      return { ok: false };
-    }
-    const document = await pack.getDocument(item.itemId);
-    if (!document) {
-      ui.notifications.error("Mindestens ein Item konnte nicht geladen werden.");
-      return { ok: false };
-    }
-    itemDocuments.set(item.key, document);
-  }
-
-  const totalPrice = items.reduce(
-    (sum, item) => sum + getCartItemPrice(item) * (Number(item.quantity) || 0),
-    0
-  );
-  const paymentResult = await deductCurrency(paymentActor, totalPrice);
-  if (!paymentResult.ok) {
-    if (paymentResult.reason === "insufficient-funds") {
-      ui.notifications.warn("Nicht genug Gold für den Kauf.");
-    }
-    return { ok: false };
-  }
-
-  for (const item of items) {
-    if (item.entryType === "spell") {
-      const source =
-        foundry?.utils?.deepClone?.(item.consumableSource) ??
-        (typeof structuredClone === "function"
-          ? structuredClone(item.consumableSource)
-          : JSON.parse(JSON.stringify(item.consumableSource)));
-      if (!source) {
-        continue;
-      }
-      delete source._id;
-      source.system = source.system ?? {};
-      source.system.quantity = item.quantity;
-      await actor.createEmbeddedDocuments("Item", [source]);
-      continue;
-    }
-    const itemDocument = itemDocuments.get(item.key);
-    if (!itemDocument) {
-      continue;
-    }
-    const itemData = itemDocument.toObject();
-    delete itemData._id;
-    itemData.system = itemData.system ?? {};
-    itemData.system.quantity = item.quantity;
-    await actor.createEmbeddedDocuments("Item", [itemData]);
-  }
-
-  ui.notifications.info("Warenkorb erfolgreich gekauft.");
-  return { ok: true };
+async function chooseQuantity(name, price) {
+  const data = await choose({ title: text("PF2EGeneralStore.Cart.QuantityTitle"), content: `<form class="pf2e-general-store-cart"><p><strong>${escape(name)}</strong> — ${gold(price)}</p><label>${text("PF2EGeneralStore.Common.Quantity")} <input name="quantity" type="number" min="1" value="1"></label></form>` });
+  const quantity = Number(data?.get("quantity"));
+  return Number.isSafeInteger(quantity) && quantity > 0 ? quantity : null;
 }
 
-function openCartQuantityDialog({ name, priceGold }) {
-  return new Promise((resolve) => {
-    let resolved = false;
-    const finalize = (value) => {
-      if (resolved) {
-        return;
-      }
-      resolved = true;
-      resolve(value);
+async function chooseSpellConsumable(spell) {
+  const types = Object.keys(CONFIG.PF2E?.spellcastingItems ?? {});
+  const defaultType = getDefaultSpellConsumableType() ?? types[0];
+  const options = types.map((type) => `<option value="${escape(type)}" ${type === defaultType ? "selected" : ""}>${escape(type)}</option>`).join("");
+  const ranks = getSpellConsumableRanks(defaultType);
+  const rank = getDefaultSpellConsumableRank(spell, defaultType);
+  const rankOptions = ranks.map((value) => `<option value="${value}" ${value === rank ? "selected" : ""}>${value}</option>`).join("");
+  const data = await choose({ title: text("PF2EGeneralStore.Spell.Title"), content: `<form><label>${text("PF2EGeneralStore.Spell.Type")}<select name="type">${options}</select></label><label>${text("PF2EGeneralStore.Spell.Rank")}<select name="rank">${rankOptions}</select></label></form>` });
+  if (!data) return null;
+  return { type: data.get("type"), rank: Number(data.get("rank")) };
+}
+
+export class StoreApp extends GeneralStoreApplication {
+  static DEFAULT_OPTIONS = {
+    ...super.DEFAULT_OPTIONS, id: `${MODULE_ID}-store`, classes: [...super.DEFAULT_OPTIONS.classes, "pf2e-general-store-app"],
+    position: { width: 1200, height: 650 }, window: { ...super.DEFAULT_OPTIONS.window, title: "PF2EGeneralStore.Store.Title" },
+    actions: { selectResult: StoreApp.#selectResult, addCart: StoreApp.#addCart, addWishlist: StoreApp.#addWishlist, viewWishlist: StoreApp.#viewWishlist, checkout: StoreApp.#checkout, removeCart: StoreApp.#removeCart, sell: StoreApp.#sell, loadMore: StoreApp.#loadMore, logo: StoreApp.#logo },
+  };
+  static PARTS = { main: { template: TEMPLATES.SHOP } };
+  static #instance;
+
+  constructor(actor, options = {}) {
+    super(options); this.actor = actor; this.state = { searchTerm: "", showSpells: false, showItems: false, itemType: "", sortAlpha: false, limit: 100, selected: null, description: null, cart: new Map(), results: [] }; StoreApp.#instance = this;
+  }
+  static open(actor) {
+    const existing = this.#instance?.rendered ? this.#instance : null;
+    if (existing) { if (actor) existing.actor = actor; return existing.render({ force: true }); }
+    return new this(actor).render({ force: true });
+  }
+  static refresh() { if (this.#instance?.rendered) void this.#instance.search(); }
+  static getOpenInstance() { return this.#instance?.rendered ? this.#instance : null; }
+  async close(options) { if (StoreApp.#instance === this) StoreApp.#instance = undefined; return super.close(options); }
+
+  async _prepareContext(options) {
+    const systemLogo = game.system?.logo ?? game.system?.data?.logo;
+    const cart = [...this.state.cart.entries()].map(([key, item]) => ({ key, ...item, totalLabel: gold(this.itemPrice(item) * item.quantity) }));
+    return { ...(await super._prepareContext(options)), actorName: this.actor?.name, actorTokenSrc: this.actor?.prototypeToken?.texture?.src ?? this.actor?.img, actorGold: currencyLabel(this.actor), partyGold: currencyLabel(partyActor()), logoSrc: game.settings.get(MODULE_ID, SETTINGS.SHOP_LOGO) || systemLogo, logoAlt: game.system?.title, activeStoreLabel: getActiveStore()?.name ?? text("PF2EGeneralStore.Store.Unnamed"), isGM: game.user.isGM, ...this.state, cart, cartTotal: gold(cart.reduce((sum, item) => sum + this.itemPrice(item) * item.quantity, 0)) };
+  }
+  _onRender(context, options) {
+    super._onRender(context, options);
+    const root = this.rootElement;
+    root.querySelector('[name="store-search"]')?.addEventListener("input", (event) => { this.state.searchTerm = event.target.value; clearTimeout(this.searchTimer); this.searchTimer = setTimeout(() => void this.search(), 200); });
+    root.querySelectorAll("[data-filter]").forEach((input) => input.addEventListener("change", () => { this.state.showSpells = root.querySelector('[name="filter-spell"]').checked; this.state.showItems = root.querySelector('[name="filter-item"]').checked; this.state.itemType = root.querySelector('[name="filter-item-type"]').value; this.state.sortAlpha = root.querySelector('[name="filter-sort-alpha"]').checked; void this.search(); }));
+    if (!this.state.results.length) void this.search();
+  }
+  async search() {
+    const term = this.state.searchTerm.trim().toLowerCase();
+    const filters = getActiveStore()?.filters ?? currentGmFilters;
+    const showItems = this.state.showItems || !this.state.showSpells;
+    const showSpells = this.state.showSpells || !this.state.showItems;
+    const [items, spells] = await Promise.all([showItems ? getItemIndex() : [], showSpells ? getItemIndex({ spells: true }) : []]);
+    const matches = ({ entry }) => {
+      const level = levelOf(entry); const rarity = rarityOf(entry); const traits = traitsOf(entry).map((v) => v.toLowerCase());
+      return (!term || entry.name?.toLowerCase().includes(term)) && (!this.state.itemType || entry.type === this.state.itemType) && (filters?.minLevel == null || level >= filters.minLevel) && (filters?.maxLevel == null || level <= filters.maxLevel) && (!filters?.rarity || rarity === filters.rarity) && !(filters?.traits ?? []).some((trait) => !traits.includes(trait));
     };
-    const content = `
-      <form class="pf2e-general-store-cart">
-        <p class="purchase-title">${name}</p>
-        <p class="purchase-price">${formatGold(priceGold)} gp</p>
-        <div class="form-group">
-          <label for="pf2e-general-store-cart-quantity">Menge</label>
-          <input id="pf2e-general-store-cart-quantity" type="number" name="quantity" min="1" value="1" />
-        </div>
-      </form>
-    `;
-
-    const dialog = new Dialog({
-      title: "Menge auswählen",
-      content,
-      buttons: {
-        add: {
-          label: "Hinzufügen",
-          callback: (html) => {
-            const form = html[0]?.querySelector("form");
-            if (!form) {
-              finalize(null);
-              return true;
-            }
-            const quantity = Number(form.elements.quantity?.value);
-            if (!Number.isFinite(quantity) || quantity < 1) {
-              ui.notifications.warn("Bitte gib eine gültige Menge an.");
-              return false;
-            }
-            finalize(quantity);
-            return true;
-          },
-        },
-        close: {
-          label: "Abbrechen",
-          callback: () => {
-            finalize(null);
-          },
-        },
-      },
-      default: "add",
-      close: () => {
-        finalize(null);
-      },
-    });
-
-    dialog.render(true);
-  });
-}
-
-function getSpellConsumableTypes() {
-  const spellcastingItems = CONFIG?.PF2E?.spellcastingItems ?? {};
-  const consumableTypes = CONFIG?.PF2E?.consumableTypes ?? {};
-  return Object.entries(spellcastingItems).map(([type, data]) => ({
-    type,
-    label:
-      (consumableTypes?.[type]?.label ?? consumableTypes?.[type])
-        ? game?.i18n?.localize?.(
-            consumableTypes?.[type]?.label ?? consumableTypes?.[type]
-          ) ??
-          consumableTypes?.[type]?.label ??
-          consumableTypes?.[type]
-        : data?.label ?? data?.name ?? type,
-  }));
-}
-
-function buildSelectOptionHTML({ value, label, selected }) {
-  const option = document.createElement("option");
-  option.value = value;
-  option.textContent = label;
-  option.selected = selected;
-  return option.outerHTML;
-}
-
-function openSpellConsumableSelectionDialog(spell) {
-  return new Promise((resolve) => {
-    let resolved = false;
-    const finalize = (value, warningMessage) => {
-      if (resolved) {
-        return;
-      }
-      resolved = true;
-      if (!value) {
-        ui.notifications.warn(
-          warningMessage || "Auswahl abgebrochen oder ungültig."
-        );
-      }
-      resolve(value);
-    };
-
-    const types = getSpellConsumableTypes();
-    if (!types.length) {
-      finalize(null, "Keine Spell-Consumable-Typen verfügbar.");
-      return;
-    }
-
-    const defaultType = getDefaultSpellConsumableType() ?? types[0]?.type;
-    const defaultRank = getDefaultSpellConsumableRank(spell, defaultType);
-    const ranks = getSpellConsumableRanks(defaultType);
-    const rankOptions = ranks.length ? ranks : [defaultRank].filter((rank) =>
-      Number.isFinite(rank)
-    );
-
-    const content = `
-      <form class="pf2e-general-store-spell-selection">
-        <div class="form-group">
-          <label for="pf2e-general-store-spell-type">Typ</label>
-          <select id="pf2e-general-store-spell-type" name="type">
-            ${types
-              .map(
-                ({ type, label }) =>
-                  buildSelectOptionHTML({
-                    value: type,
-                    label,
-                    selected: type === defaultType,
-                  })
-              )
-              .join("")}
-          </select>
-        </div>
-        <div class="form-group">
-          <label for="pf2e-general-store-spell-rank">Rang</label>
-          <select id="pf2e-general-store-spell-rank" name="rank">
-            ${rankOptions
-              .map(
-                (rank) =>
-                  `<option value="${rank}" ${
-                    rank === defaultRank ? "selected" : ""
-                  }>Rang ${rank}</option>`
-              )
-              .join("")}
-          </select>
-        </div>
-      </form>
-    `;
-
-    const dialog = new Dialog({
-      title: "Spell-Consumable auswählen",
-      content,
-      buttons: {
-        select: {
-          label: "Auswählen",
-          callback: (html) => {
-            const form = html[0]?.querySelector("form");
-            if (!form) {
-              finalize(null, "Auswahl ungültig.");
-              return true;
-            }
-            const type = form.elements.type?.value;
-            const rankValue = Number(form.elements.rank?.value);
-            const availableRanks = getSpellConsumableRanks(type);
-            if (!type || !availableRanks.length) {
-              ui.notifications.warn("Bitte wähle einen gültigen Typ aus.");
-              return false;
-            }
-            if (!Number.isFinite(rankValue) || !availableRanks.includes(rankValue)) {
-              ui.notifications.warn("Bitte wähle einen gültigen Rang aus.");
-              return false;
-            }
-            finalize({ type, rank: rankValue });
-            return true;
-          },
-        },
-        close: {
-          label: "Abbrechen",
-          callback: () => {
-            finalize(null, "Auswahl abgebrochen.");
-          },
-        },
-      },
-      default: "select",
-      close: () => {
-        finalize(null, "Auswahl abgebrochen.");
-      },
-    });
-
-    dialog.render(true);
-
-    Hooks.once("renderDialog", (app, html) => {
-      if (app !== dialog) {
-        return;
-      }
-      const typeSelect = html.find("#pf2e-general-store-spell-type");
-      const rankSelect = html.find("#pf2e-general-store-spell-rank");
-      const updateRankOptions = (type) => {
-        const availableRanks = getSpellConsumableRanks(type);
-        const selectedRank = getDefaultSpellConsumableRank(spell, type);
-        rankSelect.empty();
-        if (!availableRanks.length) {
-          rankSelect.append(
-            `<option value="">Keine Ränge verfügbar</option>`
-          );
-          return;
-        }
-        availableRanks.forEach((rank) => {
-          const option = document.createElement("option");
-          option.value = String(rank);
-          option.textContent = `Rang ${rank}`;
-          if (rank === selectedRank) {
-            option.selected = true;
-          }
-          rankSelect.append(option);
-        });
-      };
-      typeSelect.on("change", (event) => {
-        updateRankOptions(event.target.value);
-      });
-    });
-  });
-}
-
-function setupResultInteractions(resultsList) {
-  const descriptionContainer = getDescriptionContainer(resultsList);
-
-  resultsList.on("click", ".store-result__button", (event) => {
-    const target = $(event.currentTarget);
-    const name = target.data("name") ?? "Unbekanntes Item";
-    const priceGold = Number(target.data("price")) || 0;
-    const packCollection = target.data("pack");
-    const itemId = target.data("itemId");
-    resultsList.find(".store-result__button.selected").removeClass("selected");
-    target.addClass("selected");
-    if (descriptionContainer.length) {
-      descriptionContainer.html(
-        '<p class="store-description__placeholder">Lade Beschreibung...</p>'
-      );
-      if (packCollection && itemId) {
-        const cacheKey = `${packCollection}.${itemId}`;
-        descriptionContainer.data("activeDescriptionKey", cacheKey);
-        void getItemDescription(packCollection, itemId).then((description) => {
-          if (descriptionContainer.data("activeDescriptionKey") !== cacheKey) {
-            return;
-          }
-          descriptionContainer.html(description || DEFAULT_DESCRIPTION_PLACEHOLDER);
-        });
-      } else {
-        descriptionContainer.data("activeDescriptionKey", null);
-        descriptionContainer.html(DEFAULT_DESCRIPTION_PLACEHOLDER);
-      }
-    }
-  });
-}
-
-async function openShopDialog(actor) {
-  const actorName = actor?.name ?? "Unbekannter Actor";
-  const actorTokenSrc = actor?.prototypeToken?.texture?.src ?? actor?.img ?? null;
-  const { currency: actorCurrency } = getActorCurrency(actor);
-  const actorGold = formatCurrencyInGold(actorCurrency);
-  const partyActor = getPartyStashActor();
-  const { currency: partyCurrency } = getActorCurrency(partyActor);
-  const partyGold = partyActor ? formatCurrencyInGold(partyCurrency) : null;
-  const systemLogo =
-    game.system?.logo ??
-    game.system?.data?.logo ??
-    game.system?.data?.media?.logo ??
-    game.system?.data?.media?.icon ??
-    null;
-  const logoAlt = game.system?.title
-    ? `${game.system.title} Logo`
-    : "System-Logo";
-  const activeStoreLabel = formatActiveStoreLabel(getActiveStore());
-  const content = await renderTemplate(TEMPLATES.SHOP, { activeStoreLabel,
-    actorName,
-    actorTokenSrc,
-    actorGold,
-    partyGold,
-    logoSrc: getCurrentShopLogo(systemLogo),
-    logoAlt,
-  });
-
-  const dialogWidth = Math.min(
-    1800,
-    Math.max(960, Math.floor(window.innerWidth * 0.95))
-  );
-
-  const dialog = new Dialog(
-    {
-      title: "General Store",
-      content,
-      buttons: {
-        close: {
-          label: "Schließen",
-        },
-      },
-      default: "close",
-    },
-    {
-      width: dialogWidth,
-      height: 650,
-      resizable: true,
-    }
-  );
-
-  dialog.render(true);
-
-  Hooks.once("renderDialog", (app, html) => {
-    if (app !== dialog) {
-      return;
-    }
-
-    app.element?.[0]?.classList.add("pf2e-general-store-window");
-
-    // Shop-Logo auswählen (nur GM): Klick öffnet FilePicker, Shift+Klick setzt zurück
-    const logoContainer = html.find(".store-logo");
-    if (logoContainer.length && game.user?.isGM) {
-      logoContainer.addClass("store-logo--clickable");
-      logoContainer.attr(
-        "title",
-        "Klick: Logo wählen • Shift+Klick: Logo zurücksetzen"
-      );
-
-      logoContainer.off("click.pf2eGeneralStoreLogo");
-      logoContainer.on("click.pf2eGeneralStoreLogo", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-
-        if (event.shiftKey) {
-          void (async () => {
-            await game.settings.set(MODULE_ID, SETTINGS.SHOP_LOGO, "");
-            ui.notifications.info("Shop-Logo zurückgesetzt.");
-            refreshOpenStoreDialogs();
-          })();
-          return;
-        }
-
-        const FP =
-          globalThis.FilePicker ?? foundry?.applications?.apps?.FilePicker ?? null;
-
-        if (!FP) {
-          ui.notifications.error("FilePicker ist nicht verfügbar.");
-          return;
-        }
-
-        const current = getCurrentShopLogo("");
-        const picker = new FP({
-          type: "image",
-          current,
-          callback: (path) => {
-            void (async () => {
-              const value = typeof path === "string" ? path : "";
-              await game.settings.set(MODULE_ID, SETTINGS.SHOP_LOGO, value);
-              ui.notifications.info("Shop-Logo gespeichert.");
-              refreshOpenStoreDialogs();
-            })();
-          },
-        });
-
-        try {
-          picker.render(true);
-        } catch (err) {
-          console.error(`${MODULE_ID} | FilePicker render failed`, err);
-          try {
-            picker.browse();
-          } catch (err2) {
-            console.error(`${MODULE_ID} | FilePicker browse failed`, err2);
-            ui.notifications.error("Konnte FilePicker nicht öffnen. Siehe Konsole.");
-          }
-        }
-      });
-    }
-
-    const cartItems = new Map();
-    const cartTotalElement = html.find("[data-cart-total]");
-    const getCartItemsArray = () =>
-      Array.from(cartItems.entries()).map(([key, item]) => ({ key, ...item }));
-    const getCartTotal = () =>
-      getCartItemsArray().reduce(
-        (sum, item) => sum + getCartItemPrice(item) * (Number(item.quantity) || 0),
-        0
-      );
-    const updateCartSummary = () => {
-      cartTotalElement.text(`${formatGold(getCartTotal())} gp`);
-    };
-    const addSelectedItemToCart = async () => {
-      const selected = html.find(".store-result__button.selected");
-      if (!selected.length) {
-        ui.notifications.warn("Bitte wähle zuerst ein Item aus.");
-        return;
-      }
-      const name = selected.data("name") ?? "Unbekanntes Item";
-      const priceGold = Number(selected.data("price")) || 0;
-      const packCollection = selected.data("pack");
-      const itemId = selected.data("itemId");
-      const entryType = selected.data("entryType") === "spell" ? "spell" : "item";
-      const icon =
-        selected.data("icon") ??
-        (entryType === "spell" ? "icons/svg/book.svg" : "icons/svg/item-bag.svg");
-      const levelValue = selected.data("level");
-      const level = Number.isFinite(Number(levelValue)) ? Number(levelValue) : null;
-      const rarity = selected.data("rarity") || null;
-      const isLegacy = Boolean(selected.data("legacy"));
-      const traitsValue = selected.data("traits");
-      const traits =
-        typeof traitsValue === "string" && traitsValue.length
-          ? traitsValue.split("|").filter((trait) => trait)
-          : [];
-      if (!packCollection || !itemId) {
-        ui.notifications.warn("Kein gültiges Item ausgewählt.");
-        return;
-      }
-      const quantity = await openCartQuantityDialog({ name, priceGold });
-      if (!Number.isFinite(quantity) || quantity < 1) {
-        return;
-      }
-      let spellDetails = null;
-      if (entryType === "spell") {
-        const pack = game.packs.get(packCollection);
-        if (!pack) {
-          ui.notifications.error("Compendium nicht gefunden.");
-          return;
-        }
-        const spell = await pack.getDocument(itemId);
-        if (!spell) {
-          ui.notifications.error("Spell konnte nicht geladen werden.");
-          return;
-        }
-        const selection = await openSpellConsumableSelectionDialog(spell);
-        if (!selection) {
-          return;
-        }
-        spellDetails = await createSpellConsumableSource(spell, selection);
-        if (!spellDetails) {
-          return;
-        }
-      }
-      const computedPrice =
-        entryType === "spell" ? Number(spellDetails?.price) || 0 : priceGold;
-      const key =
-        entryType === "spell"
-          ? `${packCollection}.${itemId}.${spellDetails?.consumableType ?? "spell"}.${spellDetails?.rank ?? "rank"}`
-          : `${packCollection}.${itemId}`;
-      const existing = cartItems.get(key);
-      if (existing) {
-        existing.quantity += quantity;
-        if (entryType === "spell" && existing.rank == null && spellDetails?.rank != null) {
-          existing.rank = spellDetails.rank;
-        }
-      } else {
-        cartItems.set(key, {
-          itemId,
-          pack: packCollection,
-          name,
-          icon: spellDetails?.consumableImg ?? icon,
-          traits,
-          rarity,
-          level,
-          isLegacy,
-          entryType,
-          spellId: entryType === "spell" ? itemId : null,
-          spellPack: entryType === "spell" ? packCollection : null,
-          consumableSource: spellDetails?.consumableSource ?? null,
-          consumableType: spellDetails?.consumableType ?? null,
-          rank: spellDetails?.rank ?? null,
-          price: computedPrice,
-          quantity,
-        });
-      }
-      updateCartSummary();
-    };
-    const addSelectedItemToWishlist = async () => {
-      const selected = html.find(".store-result__button.selected");
-      if (!selected.length) {
-        ui.notifications.warn("Bitte wähle zuerst ein Item aus.");
-        return;
-      }
-      const name = selected.data("name") ?? "Unbekanntes Item";
-      const priceGold = Number(selected.data("price")) || 0;
-      const packCollection = selected.data("pack");
-      const itemId = selected.data("itemId");
-      const entryType = selected.data("entryType") === "spell" ? "spell" : "item";
-      if (!packCollection || !itemId) {
-        ui.notifications.warn("Kein gültiges Item ausgewählt.");
-        return;
-      }
-      const quantity = await openCartQuantityDialog({ name, priceGold });
-      if (!Number.isFinite(quantity) || quantity < 1) {
-        return;
-      }
-      const playerName =
-        actor?.token?.name ??
-        actor?.name ??
-        game.user?.name ??
-        "Unbekannter Spieler";
-      const tokenSrc =
-        actor?.token?.texture?.src ??
-        actor?.prototypeToken?.texture?.src ??
-        actor?.img ??
-        game.user?.avatar ??
-        "";
-      const player = {
-        userId: game.user?.id ?? "",
-        name: playerName,
-        avatar: game.user?.avatar ?? "",
-        tokenSrc,
-        quantity,
-      };
-      await applyWishlistMutation(
-        "addItem",
-        {
-          itemId,
-          pack: packCollection,
-          name,
-          entryType,
-          price: priceGold,
-          quantity,
-        },
-        player,
-        { [WISHLIST_OPTIONS_FLAG]: true, syncWithGm: true }
-      );
-      ui.notifications.info("Zur Wunschliste hinzugefügt.");
-    };
-    const openCartDialog = async () => {
-      const { currency: actorCurrency } = getActorCurrency(actor);
-      const actorAvailability = formatCurrencyInGold(actorCurrency) ?? "Nicht verfügbar";
-      const partyActor = getPartyStashActor();
-      const { currency: partyCurrency } = getActorCurrency(partyActor);
-      const partyAvailability = partyActor
-        ? formatCurrencyInGold(partyCurrency) ?? "Nicht verfügbar"
-        : "Nicht verfügbar";
-      const actorName = actor?.name ?? "Unbekannter Actor";
-      const dialog = new Dialog({
-        title: "Einkaufskorb",
-        content: buildCartDialogContent({
-          actorName,
-          actorAvailability,
-          partyAvailability,
-          items: getCartItemsArray(),
-          total: getCartTotal(),
-        }),
-        buttons: {
-          checkout: {
-            label: "Zur Kasse",
-            callback: async (dialogHtml) => {
-              const form = dialogHtml[0]?.querySelector("form");
-              if (!form) {
-                return false;
-              }
-              const useActor = form.elements["payment-actor"]?.checked ?? false;
-              const useParty = form.elements["payment-party"]?.checked ?? false;
-              const items = getCartItemsArray();
-              const result = await handleCartCheckout({
-                actor,
-                items,
-                useActor,
-                useParty,
-              });
-              if (!result.ok) {
-                return false;
-              }
-              cartItems.clear();
-              updateCartSummary();
-              return true;
-            },
-          },
-          close: {
-            label: "Schließen",
-          },
-        },
-        default: "checkout",
-      });
-
-      dialog.render(true);
-
-      Hooks.once("renderDialog", (app, dialogHtml) => {
-        if (app !== dialog) {
-          return;
-        }
-        const listElement = dialogHtml.find(".cart-dialog__items");
-        const renderCartDialogList = async () => {
-          listElement.html(buildCartDialogItemsHtml(getCartItemsArray()));
-          dialogHtml
-            .find("[data-cart-dialog-total]")
-            .text(`${formatGold(getCartTotal())} gp`);
-        };
-
-        dialogHtml.on("click", ".cart-dialog__remove", (event) => {
-          const key = $(event.currentTarget)
-            .closest(".cart-dialog__item")
-            .data("itemKey");
-          if (!key) {
-            return;
-          }
-          cartItems.delete(key);
-          updateCartSummary();
-          void renderCartDialogList();
-        });
-
-        dialogHtml.on("change", ".cart-dialog__qty", (event) => {
-          const input = event.currentTarget;
-          const key = $(input).closest(".cart-dialog__item").data("itemKey");
-          if (!key || !cartItems.has(key)) {
-            return;
-          }
-          let quantity = Number(input.value);
-          if (!Number.isFinite(quantity) || quantity < 1) {
-            ui.notifications.warn("Bitte gib eine gültige Menge an.");
-            quantity = 1;
-          }
-          const item = cartItems.get(key);
-          item.quantity = quantity;
-          cartItems.set(key, item);
-          updateCartSummary();
-          void renderCartDialogList();
-        });
-      });
-    };
-    const openWishlistDialog = async () => {
-      const wishlistState = getWishlistState();
-      const partyActor = getPartyStashActor();
-      const { currency: partyCurrency } = getActorCurrency(partyActor);
-      const hasPartyCurrency = partyActor && hasCurrencyValues(partyCurrency);
-      const partyAvailability = hasPartyCurrency
-        ? formatCurrencyInGold(partyCurrency) ?? "Nicht verfügbar"
-        : "Nicht verfügbar";
-      const currentUserId = game.user?.id ?? "";
-      const items = buildWishlistDialogItems(wishlistState, currentUserId);
-      const wishlistTotalValue = wishlistTotal(wishlistState);
-      const totalValue = `${formatGold(wishlistTotalValue)} gp`;
-      const remainingValue = hasPartyCurrency
-        ? `${formatGold(getCurrencyInCopper(partyCurrency) / 100 - wishlistTotalValue)} gp`
-        : "Nicht verfügbar";
-      const content = await renderTemplate(TEMPLATES.WISHLIST, {
-        items,
-        partyGold: partyAvailability,
-        totalValue,
-        remainingValue,
-      });
-      const removeSelectedFromWishlist = async (dialogHtml) => {
-        const selections = dialogHtml.find(".wishlist-dialog__select-input:checked");
-        if (!selections.length) {
-          ui.notifications.warn("Bitte wähle mindestens ein Item aus.");
-          return false;
-        }
-        for (const selection of selections) {
-          const key = selection.dataset.itemKey;
-          const quantity = Number(selection.dataset.quantity) || 0;
-          if (!key || quantity <= 0) {
-            continue;
-          }
-          await applyWishlistMutation(
-            "removePlayerFromWishlist",
-            key,
-            currentUserId,
-            quantity,
-            { [WISHLIST_OPTIONS_FLAG]: true, syncWithGm: true }
-          );
-        }
-        return true;
-      };
-      const dialog = new Dialog({
-        title: "Wunschliste",
-        content,
-        buttons: {
-          moveToCart: {
-            label: "Auswahl in meinen Warenkorb",
-            callback: async (dialogHtml) => {
-              const selections = dialogHtml.find(
-                ".wishlist-dialog__select-input:checked"
-              );
-              if (!selections.length) {
-                ui.notifications.warn("Bitte wähle mindestens ein Item aus.");
-                return false;
-              }
-              for (const selection of selections) {
-                const key = selection.dataset.itemKey;
-                const quantity = Number(selection.dataset.quantity) || 0;
-                if (!key || quantity <= 0) {
-                  continue;
-                }
-                const result = await applyWishlistMutation(
-                  "movePlayerToCart",
-                  key,
-                  currentUserId,
-                  quantity
-                );
-                const moved = result?.moved ?? null;
-                if (!moved) {
-                  continue;
-                }
-                const cartItem = await buildCartItemFromWishlistItem(moved);
-                const cartKey = `${cartItem.pack}.${cartItem.itemId}`;
-                const existing = cartItems.get(cartKey);
-                if (existing) {
-                  existing.quantity += moved.quantity;
-                  cartItems.set(cartKey, existing);
-                } else {
-                  cartItems.set(cartKey, {
-                    ...cartItem,
-                    quantity: moved.quantity,
-                  });
-                }
-                if (!game.user?.isGM) {
-                  try {
-                    const authoritativeResult = await requestWishlistMutation(
-                      "removePlayerFromWishlist",
-                      [key, currentUserId, moved.quantity]
-                    );
-                    if (!authoritativeResult) {
-                      console.error(`[${MODULE_ID}] Wishlist-to-cart synchronization timed out`, {
-                        itemKey: key, quantity: moved.quantity,
-                      });
-                      ui.notifications.error(game.i18n.localize("PF2EGeneralStore.Errors.WishlistCartSyncFailed"));
-                    }
-                  } catch (error) {
-                    console.error(`[${MODULE_ID}] Wishlist-to-cart synchronization failed`, {
-                      itemKey: key, quantity: moved.quantity, error,
-                    });
-                    ui.notifications.error(game.i18n.localize("PF2EGeneralStore.Errors.WishlistCartSyncFailed"));
-                  }
-                }
-              }
-              updateCartSummary();
-              return true;
-            },
-          },
-          close: {
-            label: "Schließen",
-          },
-        },
-        default: "moveToCart",
-        width: 640,
-        height: 520,
-      });
-
-      dialog.render(true);
-
-      Hooks.once("renderDialog", (app, dialogHtml) => {
-        if (app !== dialog) {
-          return;
-        }
-        dialogHtml.on("click", ".wishlist-dialog__remove", () => {
-          void removeSelectedFromWishlist(dialogHtml);
-        });
-      });
-    };
-
-    const searchInput = html.find('input[name="store-search"]');
-    const resultsList = html.find(".store-results ul");
-    resultsList.data("actor", actor ?? null);
-    if (!Number.isFinite(Number(resultsList.data("resultLimit")))) {
-      resultsList.data("resultLimit", MAX_SEARCH_RESULTS);
-    }
-    void getItemIndex();
-    void getItemIndex({ spells: true });
-    const debouncedSearch = debounce((value) => {
-      {
-      const filters = getEffectiveShopFilters();
-      void updateSearchResults(value, resultsList, filters);
-    }
-    });
-
-    searchInput.on("input", (event) => {
-      debouncedSearch(event.currentTarget.value);
-    });
-
-    html.on(
-      "change",
-      'input[name="filter-spell"], input[name="filter-item"], select[name="filter-item-type"], input[name="filter-sort-alpha"]',
-      () => {
-        {
-      const filters = getEffectiveShopFilters();
-      void updateSearchResults(searchInput.val() ?? "", resultsList, filters);
-    }
-      }
-    );
-
-    setupResultInteractions(resultsList);
-
-    html.on("click", ".store-cart__add", () => {
-      void addSelectedItemToCart();
-    });
-    html.on("click", ".store-wishlist__add", () => {
-      void addSelectedItemToWishlist();
-    });
-    html.on("click", ".store-results__more", () => {
-      const currentLimit = getResultLimit(resultsList);
-      resultsList.data("resultLimit", currentLimit + SEARCH_RESULTS_INCREMENT);
-      const filters = getEffectiveShopFilters();
-      void updateSearchResults(searchInput.val() ?? "", resultsList, filters);
-    });
-    html.on("click", ".store-cart__view", () => {
-      void openCartDialog();
-    });
-    html.on("click", ".store-wishlist__view", () => {
-      void openWishlistDialog();
-    });
-    html.on("click", ".store-sell__open", () => {
-      void openSellDialog(actor);
-    });
-
-    updateCartSummary();
-    {
-      const filters = getEffectiveShopFilters();
-      void updateSearchResults(searchInput.val() ?? "", resultsList, filters);
-    }
-  });
-}
-
-async function pickLootActor(actors) {
-  return new Promise((resolve) => {
-    let resolved = false;
-    const finish = (actor) => {
-      if (resolved) return;
-      resolved = true;
-      resolve(actor ?? null);
-    };
-
-    const options = actors
-      .map((actor) => `<option value="${actor.id}">${escapeHtmlSafe(actor.name)}</option>`)
-      .join("");
-
-    new Dialog({
-      title: "Loot-Actor wählen",
-      content: `
-        <form>
-          <div class="form-group">
-            <label>Bitte Actor auswählen:</label>
-            <select name="actor" autofocus>${options}</select>
-          </div>
-        </form>
-      `,
-      buttons: {
-        confirm: {
-          label: "Auswählen",
-          callback: (html) => {
-            const id = html.find("[name=actor]").val();
-            finish(actors.find((actor) => actor.id === id) ?? null);
-          },
-        },
-        cancel: {
-          label: "Abbrechen",
-          callback: () => finish(null),
-        },
-      },
-      default: "confirm",
-      close: () => finish(null),
-    }).render({ force: true });
-  });
-}
-
-async function resolveSellLootActor() {
-  const lootActors = game.actors?.contents?.filter((actor) => actor.isOfType?.("loot")) ?? [];
-  if (!lootActors.length) {
-    ui.notifications.warn("Kein Loot-Actor im Spiel gefunden.");
-    return null;
+    this.state.results = [...items.filter(matches), ...spells.filter(matches)].map(({ entry, pack }) => ({ itemId: entry._id, pack: pack.collection, entryType: entry.type === "spell" ? "spell" : "item", name: entry.name, icon: entry.img, price: priceOf(entry), level: levelOf(entry), rarity: rarityOf(entry), traits: traitsOf(entry), totalLabel: gold(priceOf(entry)) }));
+    if (this.state.sortAlpha) this.state.results.sort((a, b) => a.name.localeCompare(b.name, game.i18n.lang));
+    await this.render();
   }
-
-  const controlledLoot =
-    canvas?.tokens?.controlled
-      ?.map((token) => token.actor)
-      .find((actor) => actor?.isOfType?.("loot")) ?? null;
-
-  let lootActor = controlledLoot;
-  if (!lootActor) {
-    const savedId = game.user.getFlag(SELL_LOOT_FLAG_SCOPE, FLAGS.SELL_LOOT_ACTOR);
-    lootActor = lootActors.find((actor) => actor.id === savedId) ?? null;
-  }
-
-  if (!lootActor) {
-    lootActor = lootActors.length === 1 ? lootActors[0] : await pickLootActor(lootActors);
-  }
-
-  if (!lootActor) return null;
-
-  await game.user.setFlag(SELL_LOOT_FLAG_SCOPE, FLAGS.SELL_LOOT_ACTOR, lootActor.id);
-  return lootActor;
+  itemPrice(item) { return item.entryType === "spell" ? getSpellConsumablePrice(item.consumableType, item.rank) || item.price : item.price; }
+  async addWishlistItem(item) { const key = `${item.pack}.${item.itemId}`; const existing = this.state.cart.get(key); this.state.cart.set(key, { ...item, quantity: (existing?.quantity ?? 0) + item.quantity }); }
+  static async #selectResult(event, target) { this.state.selected = this.state.results.find((item) => item.itemId === target.dataset.itemId && item.pack === target.dataset.pack); this.state.description = await getItemDescription(this.state.selected.pack, this.state.selected.itemId); await this.render(); }
+  static async #addCart() { const item = this.state.selected; if (!item) return ui.notifications.warn(text("PF2EGeneralStore.Errors.SelectItem")); const quantity = await chooseQuantity(item.name, item.price); if (!quantity) return; let details = {}; if (item.entryType === "spell") { const spell = await game.packs.get(item.pack)?.getDocument(item.itemId); const selection = spell && await chooseSpellConsumable(spell); if (!selection) return; details = await createSpellConsumableSource(spell, selection) ?? {}; } const key = item.entryType === "spell" ? `${item.pack}.${item.itemId}.${details.consumableType}.${details.rank}` : `${item.pack}.${item.itemId}`; const existing = this.state.cart.get(key); this.state.cart.set(key, { ...item, ...details, quantity: (existing?.quantity ?? 0) + quantity }); await this.render(); }
+  static async #addWishlist() { const item = this.state.selected; if (!item) return ui.notifications.warn(text("PF2EGeneralStore.Errors.SelectItem")); const quantity = await chooseQuantity(item.name, item.price); if (!quantity) return; const player = { userId: game.user.id, name: this.actor?.name ?? game.user.name, avatar: game.user.avatar, tokenSrc: this.actor?.prototypeToken?.texture?.src, quantity }; await mutateWishlist("addItem", { itemId: item.itemId, pack: item.pack, name: item.name, entryType: item.entryType, price: item.price, quantity }, player); if (!game.user.isGM) void requestGmMutation("addItem", [{ itemId: item.itemId, pack: item.pack, name: item.name, entryType: item.entryType, price: item.price, quantity }, player]); }
+  static #viewWishlist() { return openWishlist(this); }
+  static #removeCart(event, target) { this.state.cart.delete(target.closest("[data-cart-key]")?.dataset.cartKey); this.render(); }
+  static #loadMore() { this.state.limit += 100; this.render(); }
+  static async #checkout() { const paymentActor = this.rootElement.querySelector('[name="payment-source"]:checked')?.value === "party" ? partyActor() : this.actor; for (const item of this.state.cart.values()) { const result = await purchaseItem({ buyer: this.actor, paymentActor, packId: item.pack, itemId: item.itemId, quantity: item.quantity, expectedPriceCopper: Math.round(this.itemPrice(item) * 100), storeId: getActiveStoreId(), purchaseSource: item.consumableSource }); if (!result.ok) return ui.notifications.warn(text("PF2EGeneralStore.Errors.PurchaseFailed")); } this.state.cart.clear(); ui.notifications.info(text("PF2EGeneralStore.Store.CartPurchased")); await this.render(); }
+  static #sell() { return openSale(this.actor); }
+  static async #logo(event) { if (!game.user.isGM) return; if (event.shiftKey) { await game.settings.set(MODULE_ID, SETTINGS.SHOP_LOGO, ""); return this.render(); } const Picker = globalThis.FilePicker ?? foundry.applications.apps.FilePicker; new Picker({ type: "image", current: game.settings.get(MODULE_ID, SETTINGS.SHOP_LOGO), callback: async (path) => { await game.settings.set(MODULE_ID, SETTINGS.SHOP_LOGO, path); this.render(); } }).render({ force: true }); }
 }
 
-function getSellValueForItem(item) {
-  const value = item?.assetValue ?? null;
-  if (!value) return null;
-  if (item.isOfType?.("treasure")) return value;
-  return value.scale?.(0.5) ?? value;
-}
-
-function getItemQuantitySafe(item) {
-  const q = item?.quantity ?? item?.system?.quantity ?? 1;
-  const num = Number(q);
-  return Number.isFinite(num) && num > 0 ? num : 1;
-}
-
-async function openSellDialog(shopActor) {
-  if (!shopActor) {
-    ui.notifications.warn("Kein Actor gewählt.");
-    return;
-  }
-  if (!shopActor.isOwner) {
-    ui.notifications.warn("Du hast keine Berechtigung, von diesem Actor zu verkaufen.");
-    return;
-  }
-
-  const partyActor = getPartyStashActor();
-  const canParty = Boolean(game.user?.isGM && partyActor?.isOwner);
-  const canSellActor = Boolean(game.user?.isGM);
-
-  const content = `
-    <form class="pf2e-general-store-sell-dialog">
-      <div class="form-group">
-        <label><strong>Quelle wählen:</strong></label>
-        <div class="form-fields" style="display:flex; flex-direction:column; gap:0.25rem;">
-          <label><input type="radio" name="sell-source" value="actor" checked /> Actor (${escapeHtmlSafe(shopActor.name)})</label>
-          ${canParty ? `<label><input type="radio" name="sell-source" value="party" /> Party Stash</label>` : ""}
-          ${canSellActor ? `<label><input type="radio" name="sell-source" value="sellactor" /> Sell Actor (alles verkaufen)</label>` : ""}
-        </div>
-      </div>
-      <p class="notes">Items werden zu <strong>50%</strong> des Listenpreises verkauft, <strong>Treasure</strong> zu <strong>100%</strong>.</p>
-    </form>
-  `;
-
-  new Dialog({
-    title: "Verkaufen",
-    content,
-    buttons: {
-      next: {
-        icon: '<i class="fas fa-arrow-right"></i>',
-        label: "Weiter",
-        callback: async (html) => {
-          const source = html.find('input[name="sell-source"]:checked').val();
-          if (source === "actor") {
-            await openSellSelectionDialog({
-              title: `Verkaufen: ${shopActor.name}`,
-              sourceActor: shopActor,
-              payoutActor: shopActor,
-              allowSelect: true,
-            });
-            return true;
-          }
-
-          if (source === "party") {
-            if (!canParty) {
-              ui.notifications.warn("Party Stash nicht verfügbar.");
-              return false;
-            }
-            await openSellSelectionDialog({
-              title: "Verkaufen: Party Stash",
-              sourceActor: partyActor,
-              payoutActor: partyActor,
-              allowSelect: true,
-            });
-            return true;
-          }
-
-          if (source === "sellactor") {
-            if (!canSellActor) {
-              ui.notifications.warn("Nur GM kann aus einem Sell Actor verkaufen.");
-              return false;
-            }
-            if (!partyActor) {
-              ui.notifications.warn("Kein Party Stash Actor gefunden.");
-              return false;
-            }
-            const lootActor = await resolveSellLootActor();
-            if (!lootActor) return false;
-            await sellAllFromLootActorToParty({ lootActor, partyActor });
-            return true;
-          }
-
-          return false;
-        },
-      },
-      cancel: { label: "Abbrechen" },
-    },
-    default: "next",
-  }).render({ force: true });
-}
-
-async function openSellSelectionDialog({ title, sourceActor, payoutActor, allowSelect }) {
-  if (!sourceActor?.isOwner) {
-    ui.notifications.warn("Keine Berechtigung für diese Quelle.");
-    return;
-  }
-  if (!payoutActor?.isOwner) {
-    ui.notifications.warn("Keine Berechtigung für den Auszahlung-Actor.");
-    return;
-  }
-
-  const items = sourceActor.inventory?.contents ?? [];
-  if (!items.length) {
-    ui.notifications.info(`${sourceActor.name}: Keine Gegenstände zum Verkaufen.`);
-    return;
-  }
-
-  const rows = items
-    .map((item) => {
-      const qty = getItemQuantitySafe(item);
-      const saleValue = getSellValueForItem(item);
-      const saleText = saleValue ? saleValue.toString() : "—";
-      const meta = item.isOfType?.("treasure") ? "Treasure (100%)" : "Item (50%)";
-      return `
-        <div class="sell-dialog__item">
-          <input type="checkbox" name="sell-item" value="${item.id}" />
-          <input type="number" name="sell-quantity-${item.id}" min="1" max="${qty}" value="${qty}" aria-label="Menge" />
-          <div>
-            <div><strong>${escapeHtmlSafe(item.name)}</strong> <span class="sell-dialog__meta">x${qty} • ${meta}</span></div>
-          </div>
-          <div>${escapeHtmlSafe(saleText)}</div>
-        </div>
-      `;
-    })
-    .join("");
-
-  const content = `
-    <form class="pf2e-general-store-sell-dialog">
-      <p><strong>Quelle:</strong> ${escapeHtmlSafe(sourceActor.name)}<br/>
-         <strong>Auszahlung an:</strong> ${escapeHtmlSafe(payoutActor.name)}</p>
-      <div class="sell-dialog__items">
-        ${rows}
-      </div>
-    </form>
-  `;
-
-  const confirmed = await new Promise((resolve) => {
-    let resolved = false;
-    const finish = (value) => {
-      if (resolved) return;
-      resolved = true;
-      resolve(Boolean(value));
-    };
-
-    new Dialog({
-      title,
-      content,
-      buttons: {
-        sell: {
-          icon: '<i class="fas fa-coins"></i>',
-          label: "Verkaufen",
-          callback: async (html) => {
-            const checked = html
-              .find('input[name="sell-item"]:checked')
-              .toArray()
-              .map((el) => el.value);
-
-            if (!checked.length) {
-              ui.notifications.warn("Keine Items ausgewählt.");
-              finish(false);
-              return;
-            }
-
-            const selected = items.filter((it) => checked.includes(it.id));
-            const selections = selected.map((item) => ({
-              itemId: item.id,
-              quantity: Number(html.find(`[name="sell-quantity-${item.id}"]`).val()),
-            }));
-            if (selections.some(({ quantity }, index) => !Number.isSafeInteger(quantity) || quantity < 1 || quantity > getItemQuantitySafe(selected[index]))) {
-              ui.notifications.warn("Bitte gültige Verkaufsmengen wählen.");
-              finish(false);
-              return;
-            }
-            const payoutCopper = quoteSale({ sourceActor, selections, store: getActiveStore() });
-            const payout = new game.pf2e.Coins(copperToCoins(payoutCopper));
-            const ok = await confirmSaleDialog({
-              sourceName: sourceActor.name,
-              itemCount: selected.length,
-              payout,
-            });
-            if (!ok) {
-              finish(false);
-              return;
-            }
-
-            try {
-              await sellItems({ sourceActor, payoutActor, selections, store: getActiveStore() });
-            } catch (error) {
-              console.error(`[${MODULE_ID}] Sale failed`, { actorId: sourceActor.id, payoutActorId: payoutActor.id, error });
-              ui.notifications.error("Verkauf fehlgeschlagen. Es wurden keine Gegenstände stillschweigend entfernt.");
-              finish(false);
-              return;
-            }
-
-            await postSaleChatMessage({
-              sourceActor,
-              payoutActor,
-              payout,
-              itemCount: selected.length,
-            });
-
-            ui.notifications.info(`${sourceActor.name}: Verkaufserlös ${payout.toString()}.`);
-            finish(true);
-          },
-        },
-        cancel: {
-          icon: '<i class="fas fa-times"></i>',
-          label: "Abbrechen",
-          callback: () => finish(false),
-        },
-      },
-      default: "sell",
-      close: () => finish(false),
-    }).render({ force: true });
-  });
-
-  return confirmed;
-}
-
-async function confirmSaleDialog({ sourceName, itemCount, payout }) {
-  return new Promise((resolve) => {
-    let resolved = false;
-    const finish = (v) => {
-      if (resolved) return;
-      resolved = true;
-      resolve(Boolean(v));
-    };
-
-    new Dialog({
-      title: "Verkauf bestätigen",
-      content: `<p>${escapeHtmlSafe(sourceName)}: ${itemCount} Gegenstände für <strong>${escapeHtmlSafe(payout.toString())}</strong> verkaufen?</p>`,
-      buttons: {
-        yes: {
-          icon: '<i class="fas fa-coins"></i>',
-          label: "Verkaufen",
-          callback: () => finish(true),
-        },
-        no: {
-          icon: '<i class="fas fa-times"></i>',
-          label: "Abbrechen",
-          callback: () => finish(false),
-        },
-      },
-      default: "yes",
-      close: () => finish(false),
-    }).render({ force: true });
-  });
-}
-
-async function postSaleChatMessage({ sourceActor, payoutActor, payout, itemCount }) {
-  try {
-    const goldValue = payout.goldValue;
-    const goldText = Number.isInteger(goldValue) ? goldValue.toString() : goldValue.toFixed(2);
-    const speaker = ChatMessage.getSpeaker({ actor: payoutActor });
-    const targetLabel = payoutActor?.id === sourceActor?.id ? "an den Actor" : "in den Party Stash";
-    await ChatMessage.create({
-      speaker,
-      content: `Verkauf: ${itemCount} Gegenstände für ${goldText} Gold (${targetLabel}).`,
-    });
-  } catch (_err) {
-    // ignore
-  }
-}
-
-async function sellAllFromLootActorToParty({ lootActor, partyActor }) {
-  if (!lootActor?.isOwner) {
-    ui.notifications.warn("Keine Berechtigung für den Loot-Actor.");
-    return;
-  }
-  if (!partyActor?.isOwner) {
-    ui.notifications.warn("Keine Berechtigung für den Party Stash.");
-    return;
-  }
-
-  const items = lootActor.inventory?.contents ?? [];
-  if (!items.length) {
-    ui.notifications.info(`${lootActor.name}: Keine Gegenstände zum Verkaufen.`);
-    return;
-  }
-
-  const selections = items.map((item) => ({ itemId: item.id, quantity: getItemQuantitySafe(item) }));
-  const payoutCopper = quoteSale({ sourceActor: lootActor, selections, store: getActiveStore() });
+async function confirmSale(sourceActor, selections) {
+  const payoutCopper = quoteSale({ sourceActor, selections, store: getActiveStore() });
   const payout = new game.pf2e.Coins(copperToCoins(payoutCopper));
-  const ok = await confirmSaleDialog({
-    sourceName: lootActor.name,
-    itemCount: items.length,
-    payout,
-  });
-  if (!ok) {
-    ui.notifications.info("Aktion abgebrochen – keine Gegenstände verkauft.");
-    return;
-  }
-
-  try {
-    await sellItems({ sourceActor: lootActor, payoutActor: partyActor, selections, store: getActiveStore() });
-  } catch (error) {
-    console.error(`[${MODULE_ID}] Loot sale failed`, { actorId: lootActor.id, payoutActorId: partyActor.id, error });
-    ui.notifications.error("Verkauf fehlgeschlagen. Bitte Inventar und Währung prüfen.");
-    return;
-  }
-
-  await postSaleChatMessage({
-    sourceActor: lootActor,
-    payoutActor: partyActor,
-    payout,
-    itemCount: items.length,
-  });
-
-  ui.notifications.info(`${lootActor.name}: Verkaufserlös ${payout.toString()} (an Party Stash).`);
+  const result = await waitForDialog({ title: text("PF2EGeneralStore.Sale.ConfirmTitle"), content: `<p>${game.i18n.format("PF2EGeneralStore.Sale.ConfirmMessage", { count: selections.length, amount: escape(payout.toString()) })}</p>`, buttons: [{ action: "yes", label: text("PF2EGeneralStore.Sale.Confirm"), callback: () => true }, { action: "no", label: text("PF2EGeneralStore.Common.Cancel"), callback: () => false }], default: "yes" });
+  return result ? { payout } : null;
 }
 
-function getDefaultShopActor() {
-  const controlledActor = canvas?.tokens?.controlled?.[0]?.actor ?? null;
-  return controlledActor ?? game.user?.character ?? null;
+async function showSellApp(sourceActor, payoutActor) {
+  const inventory = sourceActor?.inventory?.contents ?? [];
+  if (!inventory.length) return ui.notifications.info(text("PF2EGeneralStore.Sale.Empty"));
+  const app = new SellApp({ viewModel: { sourceName: sourceActor.name, payoutName: payoutActor.name, items: inventory.map((item) => ({ id: item.id, name: item.name, quantity: quantityOf(item) })), total: "—" }, onQuote: (raw) => new game.pf2e.Coins(copperToCoins(quoteSale({ sourceActor, selections: raw.map(({ id, quantity }) => ({ itemId: id, quantity })), store: getActiveStore() }))).toString(), onSell: async (raw) => {
+    const selections = raw.map(({ id, quantity }) => ({ itemId: id, quantity })); const confirmation = await confirmSale(sourceActor, selections); if (!confirmation) return;
+    await sellItems({ sourceActor, payoutActor, selections, store: getActiveStore() }); ui.notifications.info(game.i18n.format("PF2EGeneralStore.Sale.Complete", { amount: confirmation.payout.toString() })); await app.close();
+  } });
+  return app.render({ force: true });
 }
 
-
-
-async function openStoreManager() {
-  if (!game.user?.isGM) {
-    ui.notifications.error(game.i18n.localize("PF2EGeneralStore.Errors.GMOnly"));
-    return;
-  }
-  return new StoreManagerApp().render({ force: true });
+async function openSale(actor) {
+  if (!actor?.isOwner) return ui.notifications.warn(text("PF2EGeneralStore.Errors.Permission"));
+  const party = partyActor();
+  const data = await choose({ title: text("PF2EGeneralStore.Sale.SourceTitle"), content: `<form><label><input type="radio" name="source" value="actor" checked>${escape(actor.name)}</label>${party ? `<label><input type="radio" name="source" value="party">${escape(party.name)}</label>` : ""}${game.user.isGM ? `<label><input type="radio" name="source" value="loot">${text("PF2EGeneralStore.Sale.LootActor")}</label>` : ""}</form>` });
+  const source = data?.get("source"); if (!source) return;
+  if (source === "party") return showSellApp(party, party);
+  if (source === "loot") { const actors = game.actors.contents.filter((entry) => entry.isOfType?.("loot")); const selection = await choose({ title: text("PF2EGeneralStore.Sale.LootActor"), content: `<form><select name="actor">${actors.map((entry) => `<option value="${entry.id}">${escape(entry.name)}</option>`).join("")}</select></form>` }); const loot = game.actors.get(selection?.get("actor")); if (loot && party) return showSellApp(loot, party); return; }
+  return showSellApp(actor, actor);
 }
 
-async function openGlobalWishlistDialog() {
-  if (!game.user?.isGM) {
-    ui.notifications.error(game.i18n.localize("PF2EGeneralStore.Errors.GMOnly"));
-    return;
-  }
-  const wishlistState = getWorldWishlistState();
-  const partyActor = getPartyStashActor();
-  const { currency } = getActorCurrency(partyActor);
-  const available = partyActor && hasCurrencyValues(currency);
-  const total = wishlistTotal(wishlistState);
-  return new WishlistApp({ viewModel: {
-    items: buildWishlistDialogItems(wishlistState, ""),
-    partyGold: available ? formatCurrencyInGold(currency) : game.i18n.localize("PF2EGeneralStore.Common.Unavailable"),
-    totalValue: `${formatGold(total)} gp`,
-    remainingValue: available ? `${formatGold(getCurrencyInCopper(currency) / 100 - total)} gp` : game.i18n.localize("PF2EGeneralStore.Common.Unavailable"),
-  } }).render({ force: true });
+function singleton(App, options) {
+  let app = persistentApps.get(App);
+  if (!app?.rendered) { app = new App(options); persistentApps.set(App, app); }
+  return app.render({ force: true });
 }
-
+function openStoreManager() { if (!game.user.isGM) return; return singleton(StoreManagerApp); }
 function openGmMenu() {
-  if (!game.user?.isGM) {
-    ui.notifications.error(game.i18n.localize("PF2EGeneralStore.Errors.GMOnly"));
-    return;
-  }
-  const filters = getCurrentGmFilters();
-  return new GmFiltersApp({
-    viewModel: {
-      traitsInput: formatTraitsInput(filters.traits),
-      minLevel: Number.isFinite(filters.minLevel) ? filters.minLevel : "",
-      maxLevel: Number.isFinite(filters.maxLevel) ? filters.maxLevel : "",
-      rarityOptions: ["", "common", "uncommon", "rare", "unique"].map((value) => ({ value, label: value ? formatRarityLabel(value) : "Keine", selected: filters.rarity === (value || null) })),
-    },
-    handlers: {
-      manageStores: () => openStoreManager(),
-      openWishlist: () => openGlobalWishlistDialog(),
-      openStore: () => {
-        const actor = getDefaultShopActor();
-        if (!actor) return ui.notifications.warn(game.i18n.localize("PF2EGeneralStore.Errors.SelectActor"));
-        return openShopDialog(actor);
-      },
-      save: async (form) => {
-        if (!form) return;
-        const data = new FormData(form);
-        const number = (key) => data.get(key) === "" ? null : Number(data.get(key));
-        await setCurrentGmFilters({ traits: parseTraitsInput(data.get("gm-traits") ?? ""), minLevel: number("min-level"), maxLevel: number("max-level"), rarity: data.get("rarity") ?? "" });
-        ui.notifications.info(game.i18n.localize("PF2EGeneralStore.GM.Saved"));
-      },
-    },
-  }).render({ force: true });
+  if (!game.user.isGM) return;
+  const filters = currentGmFilters;
+  const options = { viewModel: { traitsInput: (filters.traits ?? []).join(", "), minLevel: filters.minLevel, maxLevel: filters.maxLevel, rarityOptions: ["", "common", "uncommon", "rare", "unique"].map((value) => ({ value, label: value || "—", selected: value === filters.rarity })) }, handlers: { manageStores: openStoreManager, openWishlist: () => openWishlist(), openStore: () => StoreApp.open(defaultActor()), save: async (form) => { const data = new FormData(form); currentGmFilters = { traits: String(data.get("gm-traits") ?? "").split(",").map((v) => v.trim()).filter(Boolean), minLevel: Number(data.get("min-level")) || null, maxLevel: Number(data.get("max-level")) || null, rarity: data.get("rarity") || null }; await game.settings.set(MODULE_ID, SETTINGS.GM_FILTERS, currentGmFilters); StoreApp.refresh(); } } };
+  const existing = persistentApps.get(GmFiltersApp);
+  if (existing?.rendered) { existing.viewModel = options.viewModel; Object.assign(existing, options.handlers); return existing.render({ force: true }); }
+  return singleton(GmFiltersApp, options);
 }
+function defaultActor() { return canvas?.tokens?.controlled?.[0]?.actor ?? game.user?.character ?? null; }
+function openDefaultStore(actor = defaultActor()) { if (!actor) return ui.notifications.warn(text("PF2EGeneralStore.Errors.SelectActor")); return StoreApp.open(actor); }
 
-function addActorSheetHeaderControl(app, buttons) {
-  const allowPlayerButton = game.settings.get(MODULE_ID, SETTINGS.SHOW_STORE_BUTTON);
-  const canShowButton = game.user?.isGM || (allowPlayerButton && app.actor?.isOwner);
-  if (!canShowButton) {
-    return;
-  }
-  buttons.unshift({
-    class: "pf2e-general-store-btn",
-    icon: "fas fa-store",
-    label: "PF2EGeneralStore.Store.Title",
-    onclick: () => openShopDialog(app.actor ?? null),
-  });
+function addActorButton(app, buttons) {
+  if (!(game.user.isGM || (game.settings.get(MODULE_ID, SETTINGS.SHOW_STORE_BUTTON) && app.actor?.isOwner))) return;
+  buttons.unshift({ class: "pf2e-general-store-btn", icon: "fas fa-store", label: "PF2EGeneralStore.Store.Title", onclick: () => openDefaultStore(app.actor) });
 }
-
 function addSceneControls(controls) {
-  const tools = {
-    store: { name: "store", title: "PF2EGeneralStore.Store.Title", icon: "fas fa-store", button: true, onChange: () => {
-      const actor = getDefaultShopActor();
-      if (actor) void openShopDialog(actor);
-      else ui.notifications.warn(game.i18n.localize("PF2EGeneralStore.Errors.SelectActor"));
-    } },
-  };
-  if (game.user?.isGM) {
-    tools.filters = { name: "filters", title: "PF2EGeneralStore.GM.Title", icon: "fas fa-filter", button: true, onChange: () => openGmMenu() };
-    tools.stores = { name: "stores", title: "PF2EGeneralStore.Stores.Title", icon: "fas fa-city", button: true, onChange: () => void openStoreManager() };
-  }
-  controls[MODULE_ID] = { name: MODULE_ID, title: "PF2EGeneralStore.Store.Title", icon: "fas fa-store", layer: "controls", tools, visible: game.user?.isGM || game.settings.get(MODULE_ID, SETTINGS.SHOW_STORE_BUTTON) };
+  const visible = game.user.isGM || game.settings.get(MODULE_ID, SETTINGS.SHOW_STORE_BUTTON);
+  const tools = { store: { name: "store", title: "PF2EGeneralStore.Store.Title", icon: "fas fa-store", order: 0, button: true, onChange: () => openDefaultStore() } };
+  if (game.user.isGM) Object.assign(tools, { filters: { name: "filters", title: "PF2EGeneralStore.GM.Title", icon: "fas fa-filter", order: 10, button: true, onChange: openGmMenu }, stores: { name: "stores", title: "PF2EGeneralStore.Stores.Title", icon: "fas fa-city", order: 20, button: true, onChange: openStoreManager } });
+  controls[MODULE_ID] = { name: MODULE_ID, title: "PF2EGeneralStore.Store.Title", icon: "fas fa-store", order: 100, tools, visible };
 }
 
 export function registerPF2eGeneralStore() {
-  Hooks.on("getActorSheetHeaderButtons", addActorSheetHeaderControl);
+  Hooks.on("getActorSheetHeaderButtons", addActorButton);
   Hooks.on("getSceneControlButtons", addSceneControls);
 }
 
 Hooks.once("ready", () => {
-  currentGmFilters = getCurrentGmFilters();
-  currentWishlistState = getWorldWishlistState();
-  currentPlayerWishlistState = getPlayerWishlistState();
-  void migratePlayerWishlistState();
-  game.socket?.on(`module.${MODULE_ID}`, (payload) => {
-    if (payload?.type === "gmFiltersUpdate") {
-      currentGmFilters = normalizeGmFilters(payload.filters ?? {});
-      refreshOpenStoreDialogs();
-      return;
-    }
-    if (payload?.type === "stores:update" || payload?.type === "store:active") {
-      refreshOpenStoreDialogs();
-      return;
-    }
-    if (payload?.type === SOCKET_TYPES.WISHLIST_UPDATE) {
-      currentWishlistState = normalizeWishlistState(payload.state ?? {});
-      if (!game.user?.isGM) void setPlayerWishlistState(currentWishlistState);
-      return;
-    }
-    if (payload?.type === SOCKET_TYPES.WISHLIST_RESULT) {
-      const requestId = payload.requestId;
-      if (!requestId || !pendingWishlistMutationRequests.has(requestId)) {
-        return;
-      }
-      const pending = pendingWishlistMutationRequests.get(requestId);
-      pendingWishlistMutationRequests.delete(requestId);
-      if (pending?.timeoutId) {
-        clearTimeout(pending.timeoutId);
-      }
-      pending?.resolve?.(payload.result ?? null);
-      return;
-    }
-    if ([SOCKET_TYPES.WISHLIST_ADD, SOCKET_TYPES.WISHLIST_REMOVE_OWN].includes(payload?.type)) {
-      if (!game.user?.isGM) return;
-      void (async () => {
-        const validated = await validateWishlistRequest(payload);
-        if (!validated) { rejectWishlistRequest(payload); return; }
-        let result;
-        if (validated.type === SOCKET_TYPES.WISHLIST_ADD) {
-          const document = validated.item;
-          const price = getPriceInGold(document);
-          result = await applyWishlistMutationAsGm("addItem", {
-            itemId: document.id, pack: validated.pack.collection, name: document.name,
-            entryType: document.type === "spell" ? "spell" : "item", price, quantity: validated.quantity,
-          }, { ...contributorFromUser(validated.user), quantity: validated.quantity });
-        } else {
-          const current = getWorldWishlistState();
-          const contribution = current.items[validated.itemKey]?.players
-            ?.find((player) => player.userId === validated.user.id)?.quantity ?? 0;
-          if (validated.quantity > contribution) { rejectWishlistRequest(payload); return; }
-          result = await applyWishlistMutationAsGm(
-            "removePlayerFromWishlist", validated.itemKey, validated.user.id, validated.quantity,
-          );
-        }
-        game.socket?.emit(`module.${MODULE_ID}`, { type: SOCKET_TYPES.WISHLIST_RESULT, requestId: validated.requestId, result });
-      })().catch((error) => console.error(`[${MODULE_ID}] Wishlist socket request failed`, { requestId: payload.requestId, error }));
-    }  });
+  currentGmFilters = game.settings.get(MODULE_ID, SETTINGS.GM_FILTERS) ?? DEFAULT_GM_FILTERS;
+  currentWishlistState = worldWishlist(); currentPlayerWishlistState = playerWishlist();
+  game.socket?.on(`module.${MODULE_ID}`, async (payload) => {
+    if (payload?.type === SOCKET_TYPES.FILTERS_UPDATE || payload?.type === "gmFiltersUpdate") { currentGmFilters = payload.filters; return StoreApp.refresh(); }
+    if ([SOCKET_TYPES.STORES_UPDATE, SOCKET_TYPES.ACTIVE_STORE_UPDATE, "stores:update", "store:active"].includes(payload?.type)) return StoreApp.refresh();
+    if (payload?.type === SOCKET_TYPES.WISHLIST_UPDATE) { currentWishlistState = normalizeWishlistState(payload.state); if (!game.user.isGM) await setPlayerWishlist(currentWishlistState); const app = WishlistApp.getOpenInstance(); if (app) void openWishlist(StoreApp.getOpenInstance()); return; }
+    if (payload?.type === SOCKET_TYPES.WISHLIST_RESULT) { const pending = pendingWishlistRequests.get(payload.requestId); if (pending) { clearTimeout(pending.timeout); pendingWishlistRequests.delete(payload.requestId); pending.resolve(payload.result); } return; }
+    if (!game.user.isGM || ![SOCKET_TYPES.WISHLIST_ADD, SOCKET_TYPES.WISHLIST_REMOVE_OWN].includes(payload?.type)) return;
+    const validated = await validateWishlistRequest(payload); if (!validated) return rejectWishlistRequest(payload);
+    let result;
+    if (validated.type === SOCKET_TYPES.WISHLIST_ADD) { const item = validated.item; result = await mutateWishlist("addItem", { itemId: item.id, pack: validated.pack.collection, name: item.name, entryType: item.type === "spell" ? "spell" : "item", price: priceOf(item), quantity: validated.quantity }, { ...contributorFromUser(validated.user), quantity: validated.quantity }); }
+    else result = await mutateWishlist("removePlayerFromWishlist", validated.itemKey, validated.user.id, validated.quantity);
+    game.socket.emit(`module.${MODULE_ID}`, { type: SOCKET_TYPES.WISHLIST_RESULT, requestId: validated.requestId, result });
+  });
 });

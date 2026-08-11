@@ -1,0 +1,247 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish Foundry module
+    runs-on: ubuntu-latest
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Checkout the exact commit referenced by the release tag
+      # -----------------------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # -----------------------------------------------------------------------
+      # Read module metadata
+      # -----------------------------------------------------------------------
+      - name: Read module metadata
+        id: module
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MODULE_ID="$(jq -r '.id' module.json)"
+          MODULE_VERSION="$(jq -r '.version' module.json)"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+
+          if [[ -z "$MODULE_ID" || "$MODULE_ID" == "null" ]]; then
+            echo "::error::module.json does not contain a valid id."
+            exit 1
+          fi
+
+          if [[ -z "$MODULE_VERSION" || "$MODULE_VERSION" == "null" ]]; then
+            echo "::error::module.json does not contain a valid version."
+            exit 1
+          fi
+
+          echo "id=$MODULE_ID" >> "$GITHUB_OUTPUT"
+          echo "version=$MODULE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag_version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+
+          echo "Module:  $MODULE_ID"
+          echo "Version: $MODULE_VERSION"
+          echo "Tag:     $GITHUB_REF_NAME"
+
+      # -----------------------------------------------------------------------
+      # Verify that the Git tag matches module.json
+      #
+      # Example:
+      #   module.json = 3.0.8
+      #   tag         = v3.0.8
+      # -----------------------------------------------------------------------
+      - name: Validate tag version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MODULE_VERSION="${{ steps.module.outputs.version }}"
+          TAG_VERSION="${{ steps.module.outputs.tag_version }}"
+
+          if [[ "$MODULE_VERSION" != "$TAG_VERSION" ]]; then
+            echo "::error::Version mismatch!"
+            echo "::error::module.json: $MODULE_VERSION"
+            echo "::error::Git tag:     $TAG_VERSION"
+            echo
+            echo "Update module.json or create the correct tag before releasing."
+            exit 1
+          fi
+
+          echo "Tag version matches module.json."
+
+      # -----------------------------------------------------------------------
+      # Run Node regression tests if test files exist
+      # -----------------------------------------------------------------------
+      - name: Run tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if compgen -G "tests/*.test.mjs" > /dev/null; then
+            node --test tests/*.test.mjs
+          else
+            echo "No Node tests found. Skipping."
+          fi
+
+      # -----------------------------------------------------------------------
+      # Syntax-check JavaScript and MJS files
+      # -----------------------------------------------------------------------
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r -d '' file; do
+            echo "Checking $file"
+            node --check "$file"
+          done < <(
+            find scripts tests \
+              -type f \
+              \( -name "*.js" -o -name "*.mjs" \) \
+              -print0 2>/dev/null
+          )
+
+      # -----------------------------------------------------------------------
+      # Validate Foundry manifest metadata
+      # -----------------------------------------------------------------------
+      - name: Validate Foundry manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MODULE_ID="$(jq -r '.id' module.json)"
+          VERSION="$(jq -r '.version' module.json)"
+          MANIFEST="$(jq -r '.manifest' module.json)"
+          DOWNLOAD="$(jq -r '.download' module.json)"
+
+          if [[ "$MODULE_ID" != "pf2e-general-store" ]]; then
+            echo "::error::Unexpected module id: $MODULE_ID"
+            exit 1
+          fi
+
+          if [[ "$VERSION" != "${{ steps.module.outputs.version }}" ]]; then
+            echo "::error::Manifest version mismatch."
+            exit 1
+          fi
+
+          if [[ -z "$MANIFEST" || "$MANIFEST" == "null" ]]; then
+            echo "::error::module.json has no manifest URL."
+            exit 1
+          fi
+
+          if [[ -z "$DOWNLOAD" || "$DOWNLOAD" == "null" ]]; then
+            echo "::error::module.json has no download URL."
+            exit 1
+          fi
+
+          if [[ "$MANIFEST" != *"/releases/latest/download/module.json" ]]; then
+            echo "::warning::Manifest URL does not use the expected latest-release asset."
+          fi
+
+          if [[ "$DOWNLOAD" != *"/releases/latest/download/pf2e-general-store.zip" ]]; then
+            echo "::warning::Download URL does not use the expected release ZIP."
+          fi
+
+          echo "Foundry manifest looks valid."
+          echo "Manifest: $MANIFEST"
+          echo "Download: $DOWNLOAD"
+
+      # -----------------------------------------------------------------------
+      # Build Foundry installation ZIP
+      #
+      # module.json must be at the ZIP root.
+      # Development-only files are excluded.
+      # -----------------------------------------------------------------------
+      - name: Build release ZIP
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MODULE_ID="${{ steps.module.outputs.id }}"
+          ZIP_NAME="${MODULE_ID}.zip"
+
+          rm -rf .release
+          mkdir -p .release/package
+
+          rsync -av ./ .release/package/ \
+            --exclude=".git/" \
+            --exclude=".github/" \
+            --exclude=".release/" \
+            --exclude="tests/" \
+            --exclude=".gitignore" \
+            --exclude=".gitattributes" \
+            --exclude="*.zip"
+
+          (
+            cd .release/package
+            zip -r "../${ZIP_NAME}" .
+          )
+
+          echo "zip=.release/${ZIP_NAME}" >> "$GITHUB_OUTPUT"
+          echo "zip_name=${ZIP_NAME}" >> "$GITHUB_OUTPUT"
+
+          echo
+          echo "Created release archive:"
+          ls -lh ".release/${ZIP_NAME}"
+
+          echo
+          echo "Archive contents:"
+          unzip -l ".release/${ZIP_NAME}"
+
+      # -----------------------------------------------------------------------
+      # Validate ZIP structure
+      #
+      # Foundry requires module.json directly at archive root.
+      # -----------------------------------------------------------------------
+      - name: Validate release ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP="${{ steps.package.outputs.zip }}"
+
+          if ! unzip -Z1 "$ZIP" | grep -qx "module.json"; then
+            echo "::error::module.json is not located at the root of the ZIP."
+            exit 1
+          fi
+
+          if ! unzip -Z1 "$ZIP" | grep -qx "scripts/main.js"; then
+            echo "::error::scripts/main.js is missing from the release ZIP."
+            exit 1
+          fi
+
+          echo "Release ZIP structure looks valid."
+
+      # -----------------------------------------------------------------------
+      # Create GitHub Release and upload:
+      #
+      # - pf2e-general-store.zip
+      # - module.json
+      #
+      # The manifest can therefore use:
+      #
+      # /releases/latest/download/module.json
+      # /releases/latest/download/pf2e-general-store.zip
+      # -----------------------------------------------------------------------
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh release create "${GITHUB_REF_NAME}" \
+            "${{ steps.package.outputs.zip }}" \
+            "module.json" \
+            --title "PF2e General Store ${{ steps.module.outputs.version }}" \
+            --generate-notes \
+            --verify-tag

@@ -5,11 +5,11 @@ function itemPriceCopper(item) {
   return normalizePrice(item?.system?.price);
 }
 
-export async function purchaseItem({ buyer, paymentActor, packId, itemId, quantity = 1, expectedPriceCopper, storeId = "" }) {
+export async function purchaseItem({ buyer, paymentActor, packId, itemId, quantity = 1, expectedPriceCopper, storeId = "", purchaseSource = null }) {
   const count = Number(quantity);
   const item = await game.packs.get(packId)?.getDocument(itemId);
-  const priceCopper = itemPriceCopper(item);
-  const itemSource = item?.toObject();
+  const itemSource = purchaseSource ?? item?.toObject();
+  const priceCopper = itemPriceCopper(purchaseSource ?? item);
   if (!buyer?.isOwner || !paymentActor?.isOwner) throw new Error("PF2EGeneralStore.Errors.Permission");
   if (!itemSource || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(priceCopper) || priceCopper < 0) throw new Error("PF2EGeneralStore.Errors.InvalidPurchase");
   if (Number.isSafeInteger(expectedPriceCopper) && expectedPriceCopper !== priceCopper) return { ok: false, reason: "price-changed", priceCopper };

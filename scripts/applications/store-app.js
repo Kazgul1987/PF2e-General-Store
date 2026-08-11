@@ -1957,13 +1957,13 @@ async function openShopDialog(actor) {
                       console.error(`[${MODULE_ID}] Wishlist-to-cart synchronization timed out`, {
                         itemKey: key, quantity: moved.quantity,
                       });
-                      ui.notifications.error("Der Warenkorb wurde aktualisiert, aber die Wunschliste konnte nicht synchronisiert werden.");
+                      ui.notifications.error(game.i18n.localize("PF2EGeneralStore.Errors.WishlistCartSyncFailed"));
                     }
                   } catch (error) {
                     console.error(`[${MODULE_ID}] Wishlist-to-cart synchronization failed`, {
                       itemKey: key, quantity: moved.quantity, error,
                     });
-                    ui.notifications.error("Der Warenkorb wurde aktualisiert, aber die Wunschliste konnte nicht synchronisiert werden.");
+                    ui.notifications.error(game.i18n.localize("PF2EGeneralStore.Errors.WishlistCartSyncFailed"));
                   }
                 }
               }

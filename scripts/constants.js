@@ -30,6 +30,7 @@ export const TEMPLATES = Object.freeze({
   GM_FILTERS: `modules/${MODULE_ID}/templates/gm-filters.hbs`,
   WISHLIST: `modules/${MODULE_ID}/templates/wishlist-dialog.hbs`,
   STORE_MANAGER: `modules/${MODULE_ID}/templates/store-manager.hbs`,
+  SELL: `modules/${MODULE_ID}/templates/sell-app.hbs`,
 });
 
 export const DEFAULT_GM_FILTERS = Object.freeze({

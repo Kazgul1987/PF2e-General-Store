@@ -7,6 +7,9 @@ import { getActiveStore, getActiveStoreId, getStoreDefinitions, setActiveStoreId
 import { addWishlistItem, moveWishlistItemToCart, moveWishlistPlayerToCart, normalizeWishlistState, removePlayerFromWishlist, removeWishlistItem, removeWishlistQuantity, setWishlistItemQuantity, wishlistTotal } from "../wishlist/model.js";
 import { createSpellConsumableSource, getDefaultSpellConsumableRank, getDefaultSpellConsumableType, getSpellConsumablePrice, getSpellConsumableRanks } from "../pf2e/spell-consumables.js";
 import { DEFAULT_GM_FILTERS, DEFAULT_WISHLIST_STATE, FLAGS, MODULE_ID, SETTINGS, SOCKET_TYPES, TEMPLATES } from "../constants.js";
+import { GmFiltersApp } from "./gm-filters-app.js";
+import { StoreManagerApp } from "./store-manager-app.js";
+import { WishlistApp } from "./wishlist-app.js";
 const SELL_LOOT_FLAG_SCOPE = "world";
 const DEFAULT_DESCRIPTION_PLACEHOLDER =
   '<p class="store-description__placeholder">Wähle ein Item aus, um die Beschreibung zu sehen.</p>';
@@ -2092,7 +2095,7 @@ async function pickLootActor(actors) {
       },
       default: "confirm",
       close: () => finish(null),
-    }).render(true);
+    }).render({ force: true });
   });
 }
 
@@ -2219,7 +2222,7 @@ async function openSellDialog(shopActor) {
       cancel: { label: "Abbrechen" },
     },
     default: "next",
-  }).render(true);
+  }).render({ force: true });
 }
 
 async function openSellSelectionDialog({ title, sourceActor, payoutActor, allowSelect }) {
@@ -2344,7 +2347,7 @@ async function openSellSelectionDialog({ title, sourceActor, payoutActor, allowS
       },
       default: "sell",
       close: () => finish(false),
-    }).render(true);
+    }).render({ force: true });
   });
 
   return confirmed;
@@ -2376,7 +2379,7 @@ async function confirmSaleDialog({ sourceName, itemCount, payout }) {
       },
       default: "yes",
       close: () => finish(false),
-    }).render(true);
+    }).render({ force: true });
   });
 }
 
@@ -2450,406 +2453,95 @@ function getDefaultShopActor() {
 
 
 async function openStoreManager() {
-  if (!game.user?.isGM) return;
-
-  const definitions = getStoreDefinitions();
-  const activeId = getActiveStoreId() ?? "";
-  const stores = Object.entries(definitions)
-    .map(([id, store]) => ({
-      id,
-      name: store?.name ?? "",
-      kind: store?.kind ?? "settlement",
-      traitsInput: formatTraitsInput(store?.filters?.traits ?? []),
-      minLevel: Number.isFinite(Number(store?.filters?.minLevel)) ? Number(store.filters.minLevel) : "",
-      maxLevel: Number.isFinite(Number(store?.filters?.maxLevel)) ? Number(store.filters.maxLevel) : "",
-      rarity: store?.filters?.rarity ?? "",
-      isNpc: (store?.kind ?? "settlement") === "npc",
-      isCommon: (store?.filters?.rarity ?? "") === "common",
-      isUncommon: (store?.filters?.rarity ?? "") === "uncommon",
-      isRare: (store?.filters?.rarity ?? "") === "rare",
-      isUnique: (store?.filters?.rarity ?? "") === "unique",
-      isActive: id === activeId,
-    }))
-    .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "", game.i18n?.lang ?? "de"));
-
-  const content = await renderTemplate(TEMPLATES.STORE_MANAGER, {
-    stores,
-    activeId,
-    hasScene: Boolean(canvas?.scene),
-  });
-
-  const dialog = new Dialog(
-    {
-      title: "General Store: Shops (Settlements/NPCs)",
-      content,
-      buttons: {
-        save: {
-          label: "Speichern",
-          callback: (html) => {
-            const form = html[0]?.querySelector("form");
-            if (!form) return false;
-
-            const rows = Array.from(form.querySelectorAll(".store-manager__row"));
-            const nextDefinitions = {};
-
-            for (const row of rows) {
-              const id = row.dataset.storeId;
-              if (!id) continue;
-
-              const name = row.querySelector(".store-manager__name")?.value?.trim() ?? "";
-              if (!name) {
-                ui.notifications.warn("Jeder Shop braucht einen Namen.");
-                return false;
-              }
-
-              const kind = row.querySelector(".store-manager__kind")?.value === "npc" ? "npc" : "settlement";
-              const traitsValue = row.querySelector(".store-manager__traits")?.value ?? "";
-              const minValue = row.querySelector(".store-manager__min")?.value ?? "";
-              const maxValue = row.querySelector(".store-manager__max")?.value ?? "";
-              const rarityValue = row.querySelector(".store-manager__rarity")?.value ?? "";
-
-              const minLevel = minValue === "" ? null : Number(minValue);
-              const maxLevel = maxValue === "" ? null : Number(maxValue);
-
-              nextDefinitions[id] = {
-                id,
-                name,
-                kind,
-                filters: {
-                  traits: parseTraitsInput(traitsValue),
-                  minLevel: Number.isFinite(minLevel) ? minLevel : null,
-                  maxLevel: Number.isFinite(maxLevel) ? maxLevel : null,
-                  rarity: rarityValue,
-                },
-              };
-            }
-
-            const nextActiveId = form.querySelector('select[name="active-store"]')?.value ?? "";
-            void (async () => {
-              await setStoreDefinitions(nextDefinitions);
-              await setActiveStoreId(nextActiveId);
-              ui.notifications.info("Shops gespeichert.");
-            })();
-
-            return true;
-          },
-        },
-        close: { label: "Schließen" },
-      },
-      default: "save",
-    },
-    { width: 820, height: 650, resizable: true }
-  );
-
-  dialog.render(true);
-
-  Hooks.once("renderDialog", (app, html) => {
-    if (app !== dialog) return;
-
-    const addRow = (store = null) => {
-      const id = store?.id ?? generateStoreId();
-      const name = store?.name ?? "";
-      const kind = store?.kind ?? "settlement";
-      const traitsInput = store?.traitsInput ?? "";
-      const minLevel = store?.minLevel ?? "";
-      const maxLevel = store?.maxLevel ?? "";
-      const rarity = store?.rarity ?? "";
-
-      const rarityOptions = [
-        { value: "", label: "Alle" },
-        { value: "common", label: "Common" },
-        { value: "uncommon", label: "Uncommon" },
-        { value: "rare", label: "Rare" },
-        { value: "unique", label: "Unique" },
-      ];
-
-      const rarityHtml = rarityOptions
-        .map((opt) => {
-          const selected = opt.value === rarity ? 'selected="selected"' : "";
-          return `<option value="${opt.value}" ${selected}>${opt.label}</option>`;
-        })
-        .join("");
-
-      const kindSettlementSelected = kind !== "npc" ? 'selected="selected"' : "";
-      const kindNpcSelected = kind === "npc" ? 'selected="selected"' : "";
-
-      const rowHtml = $(`
-        <tr class="store-manager__row" data-store-id="${id}">
-          <td>
-            <input type="text" class="store-manager__name" value="${escapeHtmlSafe(name)}" placeholder="z.B. Otari – Krämerladen" />
-          </td>
-          <td>
-            <select class="store-manager__kind">
-              <option value="settlement" ${kindSettlementSelected}>Settlement</option>
-              <option value="npc" ${kindNpcSelected}>NPC</option>
-            </select>
-          </td>
-          <td class="store-manager__num">
-            <input type="number" class="store-manager__min" value="${minLevel}" min="0" />
-          </td>
-          <td class="store-manager__num">
-            <input type="number" class="store-manager__max" value="${maxLevel}" min="0" />
-          </td>
-          <td>
-            <select class="store-manager__rarity">${rarityHtml}</select>
-          </td>
-          <td>
-            <input type="text" class="store-manager__traits" value="${escapeHtmlSafe(traitsInput)}" placeholder="traits, kommagetrennt" />
-          </td>
-          <td class="store-manager__actions">
-            <button type="button" class="store-manager__delete" title="Shop löschen">
-              <i class="fas fa-trash" aria-hidden="true"></i>
-            </button>
-          </td>
-        </tr>
-      `);
-
-      html.find("tbody.store-manager__tbody").append(rowHtml);
-
-      const activeSelect = html.find('select[name="active-store"]');
-      if (activeSelect.length) {
-        const option = $(`<option value="${id}">${escapeHtmlSafe(name || "(Neuer Shop)")}</option>`);
-        activeSelect.append(option);
-      }
-    };
-
-    html.on("click", ".store-manager__add", () => addRow());
-
-    html.on("click", ".store-manager__delete", (event) => {
-      const row = $(event.currentTarget).closest(".store-manager__row");
-      const id = row.data("storeId");
-      row.remove();
-
-      const activeSelect = html.find('select[name="active-store"]');
-      activeSelect.find(`option[value="${id}"]`).remove();
-      if (activeSelect.val() === id) activeSelect.val("");
-    });
-
-    html.on("input", ".store-manager__name", (event) => {
-      const row = $(event.currentTarget).closest(".store-manager__row");
-      const id = row.data("storeId");
-      const value = String(event.currentTarget.value ?? "").trim();
-      const activeSelect = html.find('select[name="active-store"]');
-      const opt = activeSelect.find(`option[value="${id}"]`);
-      if (opt.length) opt.text(value || "(Neuer Shop)");
-    });
-  });
+  if (!game.user?.isGM) {
+    ui.notifications.error(game.i18n.localize("PF2EGeneralStore.Errors.GMOnly"));
+    return;
+  }
+  return new StoreManagerApp().render({ force: true });
 }
 
 async function openGlobalWishlistDialog() {
+  if (!game.user?.isGM) {
+    ui.notifications.error(game.i18n.localize("PF2EGeneralStore.Errors.GMOnly"));
+    return;
+  }
   const wishlistState = getWorldWishlistState();
   const partyActor = getPartyStashActor();
-  const { currency: partyCurrency } = getActorCurrency(partyActor);
-  const hasPartyCurrency = partyActor && hasCurrencyValues(partyCurrency);
-  const partyAvailability = hasPartyCurrency
-    ? formatCurrencyInGold(partyCurrency) ?? "Nicht verfügbar"
-    : "Nicht verfügbar";
-  const items = buildWishlistDialogItems(wishlistState, "");
-  const wishlistTotalValue = wishlistTotal(wishlistState);
-  const totalValue = `${formatGold(wishlistTotalValue)} gp`;
-  const remainingValue = hasPartyCurrency
-    ? `${formatGold(getCurrencyInCopper(partyCurrency) / 100 - wishlistTotalValue)} gp`
-    : "Nicht verfügbar";
-  const content = await renderTemplate(TEMPLATES.WISHLIST, {
-    items,
-    partyGold: partyAvailability,
-    totalValue,
-    remainingValue,
-  });
-
-  const dialog = new Dialog({
-    title: "Globale Wunschliste",
-    content,
-    buttons: {
-      close: {
-        label: "Schließen",
-      },
-    },
-    width: 640,
-    height: 520,
-  });
-
-  dialog.render(true);
+  const { currency } = getActorCurrency(partyActor);
+  const available = partyActor && hasCurrencyValues(currency);
+  const total = wishlistTotal(wishlistState);
+  return new WishlistApp({ viewModel: {
+    items: buildWishlistDialogItems(wishlistState, ""),
+    partyGold: available ? formatCurrencyInGold(currency) : game.i18n.localize("PF2EGeneralStore.Common.Unavailable"),
+    totalValue: `${formatGold(total)} gp`,
+    remainingValue: available ? `${formatGold(getCurrencyInCopper(currency) / 100 - total)} gp` : game.i18n.localize("PF2EGeneralStore.Common.Unavailable"),
+  } }).render({ force: true });
 }
 
 function openGmMenu() {
+  if (!game.user?.isGM) {
+    ui.notifications.error(game.i18n.localize("PF2EGeneralStore.Errors.GMOnly"));
+    return;
+  }
   const filters = getCurrentGmFilters();
-  const content = renderTemplate(TEMPLATES.GM_FILTERS, {
-    traitsInput: formatTraitsInput(filters.traits),
-    minLevel: Number.isFinite(filters.minLevel) ? filters.minLevel : "",
-    maxLevel: Number.isFinite(filters.maxLevel) ? filters.maxLevel : "",
-    rarityOptions: [
-      { value: "", label: "Keine", selected: !filters.rarity },
-      { value: "common", label: "Common", selected: filters.rarity === "common" },
-      { value: "uncommon", label: "Uncommon", selected: filters.rarity === "uncommon" },
-      { value: "rare", label: "Rare", selected: filters.rarity === "rare" },
-      { value: "unique", label: "Unique", selected: filters.rarity === "unique" },
-    ],
-  });
-
-  content.then((htmlContent) => {
-    const dialog = new Dialog({
-      title: "General Store (GM)",
-      content: htmlContent,
-      buttons: {
-        manageStores: {
-          label: "Settlements/NPCs",
-          callback: () => {
-            void openStoreManager();
-            return true;
-          },
-        },
-        wishlist: {
-          label: "Globale Wunschliste",
-          callback: () => {
-            void openGlobalWishlistDialog();
-            return true;
-          },
-        },
-        save: {
-          label: "Filter speichern",
-          callback: (html) => {
-            const form = html[0]?.querySelector("form");
-            if (!form) {
-              return false;
-            }
-            const traitsValue = form.elements["gm-traits"]?.value ?? "";
-            const minValue = form.elements["min-level"]?.value ?? "";
-            const maxValue = form.elements["max-level"]?.value ?? "";
-            const rarityValue = form.elements["rarity"]?.value ?? "";
-            const minLevel = minValue === "" ? null : Number(minValue);
-            const maxLevel = maxValue === "" ? null : Number(maxValue);
-
-            void setCurrentGmFilters({
-              traits: parseTraitsInput(traitsValue),
-              minLevel: Number.isFinite(minLevel) ? minLevel : null,
-              maxLevel: Number.isFinite(maxLevel) ? maxLevel : null,
-              rarity: rarityValue,
-            });
-            return true;
-          },
-        },
-        open: {
-          label: "Store öffnen",
-          callback: () => {
-            const actor = getDefaultShopActor();
-            if (!actor) {
-              ui.notifications.warn("Bitte wähle einen Token oder Charakter aus.");
-              return false;
-            }
-            void openShopDialog(actor);
-            return true;
-          },
-        },
-        close: {
-          label: "Schließen",
-        },
+  return new GmFiltersApp({
+    viewModel: {
+      traitsInput: formatTraitsInput(filters.traits),
+      minLevel: Number.isFinite(filters.minLevel) ? filters.minLevel : "",
+      maxLevel: Number.isFinite(filters.maxLevel) ? filters.maxLevel : "",
+      rarityOptions: ["", "common", "uncommon", "rare", "unique"].map((value) => ({ value, label: value ? formatRarityLabel(value) : "Keine", selected: filters.rarity === (value || null) })),
+    },
+    handlers: {
+      manageStores: () => openStoreManager(),
+      openWishlist: () => openGlobalWishlistDialog(),
+      openStore: () => {
+        const actor = getDefaultShopActor();
+        if (!actor) return ui.notifications.warn(game.i18n.localize("PF2EGeneralStore.Errors.SelectActor"));
+        return openShopDialog(actor);
       },
-      default: "save",
-    });
-
-    dialog.render(true);
-
-    Hooks.once("renderDialog", (app, html) => {
-      if (app !== dialog) {
-        return;
-      }
-    });
-  });
+      save: async (form) => {
+        if (!form) return;
+        const data = new FormData(form);
+        const number = (key) => data.get(key) === "" ? null : Number(data.get(key));
+        await setCurrentGmFilters({ traits: parseTraitsInput(data.get("gm-traits") ?? ""), minLevel: number("min-level"), maxLevel: number("max-level"), rarity: data.get("rarity") ?? "" });
+        ui.notifications.info(game.i18n.localize("PF2EGeneralStore.GM.Saved"));
+      },
+    },
+  }).render({ force: true });
 }
 
-function addActorSheetHeaderControl(app, html) {
+function addActorSheetHeaderControl(app, buttons) {
   const allowPlayerButton = game.settings.get(MODULE_ID, SETTINGS.SHOW_STORE_BUTTON);
   const canShowButton = game.user?.isGM || (allowPlayerButton && app.actor?.isOwner);
   if (!canShowButton) {
     return;
   }
-  const appElement = html.closest(".app");
-  const header = appElement.find(".window-header");
-  if (!header.length || header.find(".pf2e-general-store-btn").length) {
-    return;
-  }
-
-  const button = $(`
-    <a class="pf2e-general-store-btn" title="General Store">
-      <i class="fas fa-store" aria-hidden="true"></i>
-    </a>
-  `);
-
-  button.on("click", (event) => {
-    event.preventDefault();
-    openShopDialog(app.actor ?? null);
+  buttons.unshift({
+    class: "pf2e-general-store-btn",
+    icon: "fas fa-store",
+    label: "PF2EGeneralStore.Store.Title",
+    onclick: () => openShopDialog(app.actor ?? null),
   });
-
-  header.find(".window-title").after(button);
 }
 
-function addGmControlsButton(app, html) {
-  if (!game.user?.isGM) {
-    return;
+function addSceneControls(controls) {
+  const tools = {
+    store: { name: "store", title: "PF2EGeneralStore.Store.Title", icon: "fas fa-store", button: true, onChange: () => {
+      const actor = getDefaultShopActor();
+      if (actor) void openShopDialog(actor);
+      else ui.notifications.warn(game.i18n.localize("PF2EGeneralStore.Errors.SelectActor"));
+    } },
+  };
+  if (game.user?.isGM) {
+    tools.filters = { name: "filters", title: "PF2EGeneralStore.GM.Title", icon: "fas fa-filter", button: true, onChange: () => openGmMenu() };
+    tools.stores = { name: "stores", title: "PF2EGeneralStore.Stores.Title", icon: "fas fa-city", button: true, onChange: () => void openStoreManager() };
   }
-
-  const controlsRoot = html.closest("#controls");
-  const targetContainer = controlsRoot.find(".main-controls, .control-tools").first();
-  if (!targetContainer.length) {
-    return;
-  }
-
-  if (!targetContainer.find(".pf2e-general-store-control").length) {
-    const storeButton = $(`
-      <li class="control-tool pf2e-general-store-control" title="General Store (GM)">
-        <i class="fas fa-store" aria-hidden="true"></i>
-      </li>
-    `);
-
-    storeButton.on("click", (event) => {
-      event.preventDefault();
-      openGmMenu();
-    });
-
-    targetContainer.append(storeButton);
-  }
-
-  if (!targetContainer.find(".pf2e-general-store-stores-control").length) {
-    const storesButton = $(`
-      <li class="control-tool pf2e-general-store-stores-control" title="General Store: Shops verwalten">
-        <i class="fas fa-city" aria-hidden="true"></i>
-      </li>
-    `);
-
-    storesButton.on("click", (event) => {
-      event.preventDefault();
-      void openStoreManager();
-    });
-
-    targetContainer.append(storesButton);
-  }
-}
-
-function addGmChatControlButton(app, html) {
-  if (!game.user?.isGM) return;
-  const root = html?.[0] ?? html;
-  if (!(root instanceof HTMLElement) || root.querySelector("#pf2e-general-store-chat-control")) return;
-  // Foundry v14 supplies the navigation application element to this render hook.
-  const target = root.querySelector(".tabs .flexcol, .tabs") ?? root;
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "pf2e-general-store-control";
-  button.id = "pf2e-general-store-chat-control";
-  button.title = "General Store (GM)";
-  button.innerHTML = '<i class="fas fa-store" aria-hidden="true"></i>';
-  button.addEventListener("click", (event) => {
-    event.preventDefault();
-    void openGmMenu();
-  });
-  target.append(button);
+  controls[MODULE_ID] = { name: MODULE_ID, title: "PF2EGeneralStore.Store.Title", icon: "fas fa-store", layer: "controls", tools, visible: game.user?.isGM || game.settings.get(MODULE_ID, SETTINGS.SHOW_STORE_BUTTON) };
 }
 
 export function registerPF2eGeneralStore() {
-  Hooks.on("renderActorSheet", addActorSheetHeaderControl);
-  Hooks.on("renderActorSheetPF2e", addActorSheetHeaderControl);
-  Hooks.on("renderSceneControls", addGmControlsButton);
-  Hooks.on("renderSceneNavigation", addGmChatControlButton);
+  Hooks.on("getActorSheetHeaderButtons", addActorSheetHeaderControl);
+  Hooks.on("getSceneControlButtons", addSceneControls);
 }
 
 Hooks.once("ready", () => {

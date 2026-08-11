@@ -1,0 +1,6 @@
+<section class="pf2e-general-store pf2e-general-store-sale">
+  <p>{{sourceName}} → {{payoutName}}</p>
+  <ul>{{#each items}}<li data-item-id="{{id}}"><label><span>{{name}}</span><input type="number" min="0" max="{{quantity}}" value="{{quantity}}" /></label></li>{{/each}}</ul>
+  <p>{{localize "PF2EGeneralStore.Sale.Total"}}: <strong>{{total}}</strong></p>
+  <button type="button" data-action="sell" {{#if busy}}disabled{{/if}}>{{localize "PF2EGeneralStore.Sale.Confirm"}}</button>
+</section>

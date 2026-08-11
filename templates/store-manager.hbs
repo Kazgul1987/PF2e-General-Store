@@ -17,7 +17,7 @@
       </div>
 
       <div class="store-manager__toolbar">
-        <button type="button" class="store-manager__add">
+        <button type="button" class="store-manager__add" data-action="addStore">
           <i class="fas fa-plus" aria-hidden="true"></i> Neuer Shop
         </button>
       </div>
@@ -67,7 +67,7 @@
                 <input type="text" class="store-manager__traits" value="{{store.traitsInput}}" placeholder="traits, kommagetrennt" />
               </td>
               <td class="store-manager__actions">
-                <button type="button" class="store-manager__delete" title="Shop löschen">
+                <button type="button" class="store-manager__delete" data-action="deleteStore" title="Shop löschen">
                   <i class="fas fa-trash" aria-hidden="true"></i>
                 </button>
               </td>
@@ -76,5 +76,6 @@
         </tbody>
       </table>
     </div>
+    <footer><button type="button" data-action="save">{{localize "PF2EGeneralStore.Common.Save"}}</button></footer>
   </form>
 </section>

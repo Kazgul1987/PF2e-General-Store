@@ -48,5 +48,18 @@
       "Stores": "General Store: Shop-Definitionen",
       "ActiveStore": "General Store: Aktiver Shop (Fallback)"
     }
-  }
+  },
+  "PF2EGeneralStore.Store.Title": "General Store",
+  "PF2EGeneralStore.Wishlist.Title": "Wunschliste",
+  "PF2EGeneralStore.GM.Title": "General Store (SL)",
+  "PF2EGeneralStore.Stores.Title": "Shops verwalten",
+  "PF2EGeneralStore.Stores.Saved": "Shops gespeichert.",
+  "PF2EGeneralStore.GM.Saved": "Filter gespeichert.",
+  "PF2EGeneralStore.Common.Save": "Speichern",
+  "PF2EGeneralStore.Errors.GMOnly": "Diese Funktion ist nur für die Spielleitung verfügbar.",
+  "PF2EGeneralStore.Errors.SelectActor": "Bitte wähle einen Token oder Charakter aus.",
+  "PF2EGeneralStore.Errors.SaleFailed": "Der Verkauf ist fehlgeschlagen.",
+  "PF2EGeneralStore.Sale.Title": "Gegenstände verkaufen",
+  "PF2EGeneralStore.Sale.Total": "Gesamt",
+  "PF2EGeneralStore.Sale.Confirm": "Verkaufen"
 }

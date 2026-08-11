@@ -1,5 +1,6 @@
 import { normalizePrice, pay, payout } from "./currency.js";
 import { log } from "../logger.js";
+import { isPurchasableItem } from "./items.js";
 
 function itemPriceCopper(item) {
   return normalizePrice(item?.system?.price);
@@ -12,6 +13,9 @@ export async function purchaseItem({ buyer, paymentActor, packId, itemId, quanti
   const priceCopper = itemPriceCopper(purchaseSource ?? item);
   if (!buyer?.isOwner || !paymentActor?.isOwner) throw new Error("PF2EGeneralStore.Errors.Permission");
   if (!itemSource || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(priceCopper) || priceCopper < 0) throw new Error("PF2EGeneralStore.Errors.InvalidPurchase");
+  // Validate the reloaded document for normal purchases, or the generated
+  // physical source (scroll/wand) for the dedicated spell-consumable path.
+  if (!isPurchasableItem(purchaseSource ?? item)) return { ok: false, reason: "invalid-item-type" };
   if (Number.isSafeInteger(expectedPriceCopper) && expectedPriceCopper !== priceCopper) return { ok: false, reason: "price-changed", priceCopper };
   const total = priceCopper * count;
   if (!(await pay(paymentActor, total))) return { ok: false, reason: "insufficient-funds" };

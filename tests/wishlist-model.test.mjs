@@ -3,10 +3,13 @@ import test from "node:test";
 
 import {
   addWishlistContribution,
+  moveWishlistPlayerToCart,
   normalizeWishlistState,
   removeOwnWishlistContribution,
   removePlayerFromWishlist,
 } from "../scripts/wishlist/model.js";
+import { SOCKET_TYPES } from "../scripts/constants.js";
+import { buildWishlistMutationPayload } from "../scripts/wishlist/socket.js";
 
 const item = { itemId: "abc123", pack: "pf2e.equipment-srd", name: "Healing Potion", price: 4 };
 const contributor = (userId, name, quantity) => ({ userId, name, quantity });
@@ -66,4 +69,62 @@ test("GM contributor removal remains available", () => {
   const key = `${item.pack}.${item.itemId}`;
   const state = normalizeWishlistState({ items: { [key]: { ...item, quantity: 2, players: [contributor("A", "Alice", 2)] } } });
   assert.equal(removePlayerFromWishlist(state, key, "A").state.items[key], undefined);
+});
+
+function wishlistWithContributors(players) {
+  const key = `${item.pack}.${item.itemId}`;
+  return { key, state: normalizeWishlistState({ items: {
+    [key]: { ...item, quantity: players.reduce((total, player) => total + player.quantity, 0), players },
+  } }) };
+}
+
+test("moving part of one's contribution reports the moved quantity and preserves totals", () => {
+  const { key, state } = wishlistWithContributors([
+    contributor("A", "Alice", 2), contributor("B", "Bob", 3),
+  ]);
+  const result = moveWishlistPlayerToCart(state, key, "A", 1);
+  assert.equal(result.moved.quantity, 1);
+  assert.equal(result.state.items[key].quantity, 4);
+  assert.equal(result.state.items[key].players.find((player) => player.userId === "A").quantity, 1);
+  assert.equal(result.state.items[key].players.find((player) => player.userId === "B").quantity, 3);
+});
+
+test("moving a full contribution removes only that contributor", () => {
+  const { key, state } = wishlistWithContributors([
+    contributor("A", "Alice", 2), contributor("B", "Bob", 3),
+  ]);
+  const result = moveWishlistPlayerToCart(state, key, "A", 2);
+  assert.equal(result.moved.quantity, 2);
+  assert.equal(result.state.items[key].quantity, 3);
+  assert.equal(result.state.items[key].players.some((player) => player.userId === "A"), false);
+  assert.equal(result.state.items[key].players.find((player) => player.userId === "B").quantity, 3);
+});
+
+test("moving the final contribution removes the wishlist item", () => {
+  const { key, state } = wishlistWithContributors([contributor("A", "Alice", 2)]);
+  const result = moveWishlistPlayerToCart(state, key, "A", 2);
+  assert.equal(result.moved.quantity, 2);
+  assert.equal(result.state.items[key], undefined);
+});
+
+test("wishlist-to-cart synchronization uses the clamped moved quantity and remove-own protocol", () => {
+  const { key, state } = wishlistWithContributors([contributor("A", "Alice", 2)]);
+  const result = moveWishlistPlayerToCart(state, key, "A", 5);
+  assert.equal(result.moved.quantity, 2);
+
+  const payload = buildWishlistMutationPayload(
+    "removePlayerFromWishlist",
+    [key, "untrusted-ui-contributor", result.moved.quantity],
+    { requestId: "request_123", userId: "A" },
+  );
+  assert.deepEqual(payload, {
+    type: SOCKET_TYPES.WISHLIST_REMOVE_OWN,
+    requestId: "request_123",
+    userId: "A",
+    itemKey: key,
+    quantity: 2,
+  });
+  assert.equal("mutationType" in payload, false);
+  assert.notEqual(payload.type, "wishlist:add");
+  assert.notEqual(payload.type, "wishlist:move-to-cart");
 });

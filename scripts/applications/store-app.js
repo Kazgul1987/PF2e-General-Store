@@ -1,4 +1,4 @@
-import { contributorFromUser, rejectWishlistRequest, validateWishlistRequest } from "../wishlist/socket.js";
+import { buildWishlistMutationPayload, contributorFromUser, rejectWishlistRequest, validateWishlistRequest } from "../wishlist/socket.js";
 import { purchaseItem } from "../pf2e/purchases.js";
 import { pay, copperToCoins } from "../pf2e/currency.js";
 import { quoteSale, sellItems } from "../pf2e/sales.js";
@@ -276,16 +276,7 @@ async function applyWishlistMutationAsGm(type, ...args) {
 function requestWishlistMutation(type, args) {
   if (!game.socket) return Promise.resolve(null);
   const requestId = getWishlistMutationRequestId();
-  let payload = null;
-  if (type === "addItem") {
-    const [item, player] = args;
-    payload = { type: SOCKET_TYPES.WISHLIST_ADD, requestId, userId: game.user?.id,
-      packId: item?.pack, itemId: item?.itemId, quantity: Number(item?.quantity) };
-  } else if (type === "removePlayerFromWishlist") {
-    const [itemKey, _contributorId, quantity] = args;
-    payload = { type: SOCKET_TYPES.WISHLIST_REMOVE_OWN, requestId, userId: game.user?.id,
-      itemKey, quantity: Number(quantity) };
-  }
+  const payload = buildWishlistMutationPayload(type, args, { requestId, userId: game.user?.id });
   if (!payload) return Promise.resolve(null);
   return new Promise((resolve) => {
     const timeoutId = setTimeout(() => { pendingWishlistMutationRequests.delete(requestId); resolve(null); }, WISHLIST_MUTATION_REQUEST_TIMEOUT_MS);
@@ -1955,6 +1946,25 @@ async function openShopDialog(actor) {
                     ...cartItem,
                     quantity: moved.quantity,
                   });
+                }
+                if (!game.user?.isGM) {
+                  try {
+                    const authoritativeResult = await requestWishlistMutation(
+                      "removePlayerFromWishlist",
+                      [key, currentUserId, moved.quantity]
+                    );
+                    if (!authoritativeResult) {
+                      console.error(`[${MODULE_ID}] Wishlist-to-cart synchronization timed out`, {
+                        itemKey: key, quantity: moved.quantity,
+                      });
+                      ui.notifications.error("Der Warenkorb wurde aktualisiert, aber die Wunschliste konnte nicht synchronisiert werden.");
+                    }
+                  } catch (error) {
+                    console.error(`[${MODULE_ID}] Wishlist-to-cart synchronization failed`, {
+                      itemKey: key, quantity: moved.quantity, error,
+                    });
+                    ui.notifications.error("Der Warenkorb wurde aktualisiert, aber die Wunschliste konnte nicht synchronisiert werden.");
+                  }
                 }
               }
               updateCartSummary();

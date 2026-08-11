@@ -6,6 +6,21 @@ const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const PACK_ID = /^[A-Za-z0-9_.-]{1,128}$/;
 const TYPES = new Set([SOCKET_TYPES.WISHLIST_ADD, SOCKET_TYPES.WISHLIST_REMOVE_OWN]);
 
+/** Build one of the protocol's explicit, contributor-scoped player requests. */
+export function buildWishlistMutationPayload(type, args, { requestId, userId }) {
+  if (type === "addItem") {
+    const [item] = args;
+    return { type: SOCKET_TYPES.WISHLIST_ADD, requestId, userId,
+      packId: item?.pack, itemId: item?.itemId, quantity: Number(item?.quantity) };
+  }
+  if (type === "removePlayerFromWishlist") {
+    const [itemKey, , quantity] = args;
+    return { type: SOCKET_TYPES.WISHLIST_REMOVE_OWN, requestId, userId,
+      itemKey, quantity: Number(quantity) };
+  }
+  return null;
+}
+
 /**
  * Foundry v14 module socket listeners receive emitted arguments, but no
  * server-attested sender identity. `userId` is therefore validated attribution,

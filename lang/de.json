@@ -6,7 +6,9 @@
       "Select": "Auswählen",
       "Cancel": "Abbrechen",
       "Quantity": "Menge",
-      "All": "Alle"
+      "All": "Alle",
+      "None": "Keine",
+      "Level": "Level"
     },
     "Store": {
       "Unnamed": "Unbenannter Shop",
@@ -18,7 +20,19 @@
       "Purchased": "{name} wurde gekauft.",
       "Active": "Du kaufst gerade bei:",
       "SelectDescription": "Wähle ein Item aus, um die Beschreibung zu sehen.",
-      "CartPurchased": "Warenkorb erfolgreich gekauft."
+      "CartPurchased": "Warenkorb erfolgreich gekauft.",
+      "Logo": "Logo",
+      "Spells": "Zauber",
+      "Items": "Gegenstände",
+      "Types": {
+        "Weapon": "Waffe",
+        "Armor": "Rüstung",
+        "Equipment": "Ausrüstung",
+        "Shield": "Schild",
+        "Consumable": "Verbrauchsgegenstand",
+        "Treasure": "Schatz",
+        "Backpack": "Rucksack"
+      }
     },
     "Cart": {
       "Add": "In den Einkaufskorb",
@@ -30,7 +44,13 @@
     },
     "Wishlist": {
       "Add": "Auf Wunschliste",
-      "View": "Wunschliste anzeigen"
+      "View": "Wunschliste anzeigen",
+      "PartyAvailable": "Party-Stash verfügbar",
+      "TotalValue": "Gesamtwert",
+      "Remaining": "Noch verfügbar",
+      "Empty": "Keine Gegenstände auf der Wunschliste.",
+      "RemoveSelected": "Auswahl entfernen",
+      "MoveToCart": "Auswahl in meinen Warenkorb"
     },
     "Sale": {
       "Open": "Verkaufen",
@@ -57,7 +77,8 @@
       "PurchaseFailed": "Der Kauf ist fehlgeschlagen; eine mögliche Zahlung wurde zurückerstattet.",
       "SelectItem": "Bitte wähle zuerst ein Item aus.",
       "SaleItemRollbackFailed": "Der Verkauf konnte nicht vollständig rückgängig gemacht werden. Die Auszahlung bleibt erhalten, damit nicht sowohl Gegenstände als auch Bezahlung verloren gehen. Bitte prüfe das betroffene Inventar manuell.",
-      "SalePayoutRollbackFailed": "Die Gegenstände wurden wiederhergestellt, aber die Auszahlung konnte nicht zurückgenommen werden. Bitte prüfe Inventar und Währung manuell."
+      "SalePayoutRollbackFailed": "Die Gegenstände wurden wiederhergestellt, aber die Auszahlung konnte nicht zurückgenommen werden. Bitte prüfe Inventar und Währung manuell.",
+      "CartUnavailable": "Für diese Wunschliste ist kein Warenkorb verfügbar."
     },
     "Settings": {
       "ShowButton": {
@@ -70,6 +91,42 @@
       "Logo": "General Store: Shop-Logo",
       "Stores": "General Store: Shop-Definitionen",
       "ActiveStore": "General Store: Aktiver Shop (Fallback)"
+    },
+    "Filters": {
+      "Menu": "General Store SL-Menü",
+      "Description": "Öffne den General Store für den aktuell ausgewählten Token oder deinen Charakter.",
+      "Traits": "Traits (Mehrfachauswahl)",
+      "TraitsPlaceholder": "z. B. alchemical, consumable, fire",
+      "TraitsHint": "Mehrere Traits mit Komma trennen.",
+      "MinLevel": "Min. Itemlevel",
+      "MaxLevel": "Max. Itemlevel",
+      "Rarity": "Seltenheit",
+      "ManageStores": "Settlements/NPCs",
+      "GlobalWishlist": "Globale Wunschliste",
+      "Save": "Filter speichern",
+      "OpenStore": "Store öffnen"
+    },
+    "StoreManager": {
+      "Active": "Aktiver Shop",
+      "ThisScene": "(diese Szene)",
+      "Fallback": "(Fallback)",
+      "NoStore": "Kein Shop",
+      "Hint": "Spieler sehen diesen Namen im Einkaufsmenü. Die Filter unten bestimmen das Sortiment (Item-Level, Rarity, Traits).",
+      "NewStore": "Neuer Shop",
+      "Name": "Name",
+      "Type": "Typ",
+      "Traits": "Traits",
+      "NamePlaceholder": "z. B. Otari – Krämerladen",
+      "Settlement": "Settlement",
+      "NPC": "NPC",
+      "TraitsPlaceholder": "Traits, kommagetrennt",
+      "Delete": "Shop löschen",
+      "Min": "Min",
+      "Max": "Max",
+      "Common": "Gewöhnlich",
+      "Uncommon": "Ungewöhnlich",
+      "Rare": "Selten",
+      "Unique": "Einzigartig"
     }
   },
   "PF2EGeneralStore.Store.Title": "General Store",

@@ -1,13 +1,13 @@
 <form class="pf2e-general-store-wishlist-dialog">
   <div class="wishlist-dialog__summary">
     <span class="wishlist-dialog__budget">
-      Party-Stash verfügbar: <strong>{{partyGold}}</strong>
+      {{localize "PF2EGeneralStore.Wishlist.PartyAvailable"}}: <strong>{{partyGold}}</strong>
     </span>
     <span class="wishlist-dialog__total">
-      Gesamtwert: <strong>{{totalValue}}</strong>
+      {{localize "PF2EGeneralStore.Wishlist.TotalValue"}}: <strong>{{totalValue}}</strong>
     </span>
     <span class="wishlist-dialog__remaining">
-      Noch verfügbar: <strong>{{remainingValue}}</strong>
+      {{localize "PF2EGeneralStore.Wishlist.Remaining"}}: <strong>{{remainingValue}}</strong>
     </span>
   </div>
   <ul class="wishlist-dialog__items">
@@ -29,7 +29,7 @@
             {{/if}}
             <div class="wishlist-dialog__details">
               <span class="wishlist-dialog__name">{{name}}</span>
-              <span class="wishlist-dialog__meta">Menge: {{quantity}}</span>
+              <span class="wishlist-dialog__meta">{{localize "PF2EGeneralStore.Common.Quantity"}}: {{quantity}}</span>
             </div>
             <span class="wishlist-dialog__price">{{totalLabel}}</span>
           </div>
@@ -47,11 +47,11 @@
         </li>
       {{/each}}
     {{else}}
-      <li class="wishlist-dialog__placeholder">Keine Items auf der Wunschliste.</li>
+      <li class="wishlist-dialog__placeholder">{{localize "PF2EGeneralStore.Wishlist.Empty"}}</li>
     {{/if}}
   </ul>
   <div class="wishlist-dialog__actions">
-    <button class="wishlist-dialog__remove" type="button" data-action="removeSelected">Auswahl entfernen</button>
-    <button class="wishlist-dialog__move" type="button" data-action="moveToCart">Auswahl in meinen Warenkorb</button>
+    <button class="wishlist-dialog__remove" type="button" data-action="removeSelected">{{localize "PF2EGeneralStore.Wishlist.RemoveSelected"}}</button>
+    {{#if canMoveToCart}}<button class="wishlist-dialog__move" type="button" data-action="moveToCart">{{localize "PF2EGeneralStore.Wishlist.MoveToCart"}}</button>{{/if}}
   </div>
 </form>

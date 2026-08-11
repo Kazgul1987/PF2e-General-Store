@@ -1,6 +1,6 @@
 import { buildWishlistMutationPayload, contributorFromUser, rejectWishlistRequest, validateWishlistRequest } from "../wishlist/socket.js";
 import { purchaseItem } from "../pf2e/purchases.js";
-import { copperToCoins } from "../pf2e/currency.js";
+import { copperToCoins, normalizePrice } from "../pf2e/currency.js";
 import { quoteSale, sellItems } from "../pf2e/sales.js";
 import { createSpellConsumableSource, getDefaultSpellConsumableRank, getDefaultSpellConsumableType, getSpellConsumablePrice, getSpellConsumableRanks } from "../pf2e/spell-consumables.js";
 import { getItemDescription, getItemIndex } from "../data/compendium-index.js";
@@ -12,6 +12,7 @@ import { GmFiltersApp } from "./gm-filters-app.js";
 import { StoreManagerApp } from "./store-manager-app.js";
 import { WishlistApp } from "./wishlist-app.js";
 import { SellApp } from "./sell-app.js";
+import { checkoutCart } from "./store-workflows.js";
 
 let currentGmFilters = { ...DEFAULT_GM_FILTERS };
 let currentWishlistState = { ...DEFAULT_WISHLIST_STATE };
@@ -23,7 +24,7 @@ const text = (key) => game.i18n.localize(key);
 const gold = (value) => `${Number(value || 0).toLocaleString()} gp`;
 const traitsOf = (entry) => Array.isArray(entry?.system?.traits?.value) ? entry.system.traits.value : [];
 const levelOf = (entry) => Number(entry?.system?.level?.value ?? entry?.system?.level ?? entry?.system?.rank?.value ?? entry?.system?.rank ?? 0);
-const priceOf = (entry) => Number(entry?.system?.price?.value?.gp ?? entry?.system?.price?.gp ?? entry?.system?.price?.value ?? entry?.system?.price ?? 0);
+const priceCopperOf = (entry) => normalizePrice(entry?.system?.price);
 const rarityOf = (entry) => String(entry?.system?.traits?.rarity ?? "").toLowerCase();
 const quantityOf = (item) => Math.max(1, Number(item?.system?.quantity ?? 1));
 const escape = (value) => foundry.utils.escapeHTML(String(value ?? ""));
@@ -90,10 +91,11 @@ function wishlistRows(state, userId) {
 
 async function openWishlist(owner) {
   const app = WishlistApp.getOpenInstance() ?? new WishlistApp();
+  app.owner = owner;
   const refresh = () => {
     const state = wishlist();
     const available = partyActor() ? currencyLabel(partyActor()) : text("PF2EGeneralStore.Common.Unavailable");
-    app.viewModel = { items: wishlistRows(state, game.user.id), partyGold: available, totalValue: gold(wishlistTotal(state)), remainingValue: available };
+    app.viewModel = { items: wishlistRows(state, game.user.id), partyGold: available, totalValue: gold(wishlistTotal(state)), remainingValue: available, canMoveToCart: Boolean(app.owner) };
   };
   refresh();
   app.onRemoveSelected = async (selections) => {
@@ -107,15 +109,20 @@ async function openWishlist(owner) {
     refresh(); await app.render();
   };
   app.onMoveToCart = async (selections) => {
+    if (!app.owner?.addWishlistItem) return ui.notifications.warn(text("PF2EGeneralStore.Errors.CartUnavailable"));
     for (const selection of selections) {
       const moved = game.user.isGM
         ? await mutateWishlist("moveToCart", selection.key, selection.quantity)
         : await mutateWishlist("movePlayerToCart", selection.key, game.user.id, selection.quantity);
       if (!moved?.moved) continue;
-      await owner?.addWishlistItem?.(moved.moved);
-      if (!game.user.isGM) void requestGmMutation("removePlayerFromWishlist", [selection.key, game.user.id, moved.moved.quantity]);
+      await app.owner.addWishlistItem(moved.moved);
+      if (!game.user.isGM) {
+        let response = null;
+        try { response = await requestGmMutation("removePlayerFromWishlist", [selection.key, game.user.id, moved.moved.quantity]); } catch (error) { console.error(error); }
+        if (!response) ui.notifications.error(text("PF2EGeneralStore.Errors.WishlistCartSyncFailed"));
+      }
     }
-    refresh(); await app.render(); owner?.render();
+    refresh(); await app.render(); app.owner?.render();
   };
   return app.render({ force: true });
 }
@@ -155,7 +162,7 @@ export class StoreApp extends GeneralStoreApplication {
   static #instance;
 
   constructor(actor, options = {}) {
-    super(options); this.actor = actor; this.state = { searchTerm: "", showSpells: false, showItems: false, itemType: "", sortAlpha: false, limit: 100, selected: null, description: null, cart: new Map(), results: [] }; StoreApp.#instance = this;
+    super(options); this.actor = actor; this.viewState = { searchTerm: "", showSpells: false, showItems: false, itemType: "", sortAlpha: false, limit: 100, selected: null, description: null, cart: new Map(), results: [] }; StoreApp.#instance = this;
   }
   static open(actor) {
     const existing = this.#instance?.rendered ? this.#instance : null;
@@ -168,39 +175,40 @@ export class StoreApp extends GeneralStoreApplication {
 
   async _prepareContext(options) {
     const systemLogo = game.system?.logo ?? game.system?.data?.logo;
-    const cart = [...this.state.cart.entries()].map(([key, item]) => ({ key, ...item, totalLabel: gold(this.itemPrice(item) * item.quantity) }));
-    return { ...(await super._prepareContext(options)), actorName: this.actor?.name, actorTokenSrc: this.actor?.prototypeToken?.texture?.src ?? this.actor?.img, actorGold: currencyLabel(this.actor), partyGold: currencyLabel(partyActor()), logoSrc: game.settings.get(MODULE_ID, SETTINGS.SHOP_LOGO) || systemLogo, logoAlt: game.system?.title, activeStoreLabel: getActiveStore()?.name ?? text("PF2EGeneralStore.Store.Unnamed"), isGM: game.user.isGM, ...this.state, cart, cartTotal: gold(cart.reduce((sum, item) => sum + this.itemPrice(item) * item.quantity, 0)) };
+    const cart = [...this.viewState.cart.entries()].map(([key, item]) => ({ key, ...item, totalLabel: gold(this.itemPriceCopper(item) * item.quantity / 100) }));
+    const results = this.viewState.results.slice(0, this.viewState.limit);
+    return { ...(await super._prepareContext(options)), actorName: this.actor?.name, actorTokenSrc: this.actor?.prototypeToken?.texture?.src ?? this.actor?.img, actorGold: currencyLabel(this.actor), partyGold: currencyLabel(partyActor()), logoSrc: game.settings.get(MODULE_ID, SETTINGS.SHOP_LOGO) || systemLogo, logoAlt: game.system?.title, activeStoreLabel: getActiveStore()?.name ?? text("PF2EGeneralStore.Store.Unnamed"), isGM: game.user.isGM, ...this.viewState, results, hasMore: results.length < this.viewState.results.length, cart, cartTotal: gold(cart.reduce((sum, item) => sum + this.itemPriceCopper(item) * item.quantity, 0) / 100) };
   }
   _onRender(context, options) {
     super._onRender(context, options);
     const root = this.rootElement;
-    root.querySelector('[name="store-search"]')?.addEventListener("input", (event) => { this.state.searchTerm = event.target.value; clearTimeout(this.searchTimer); this.searchTimer = setTimeout(() => void this.search(), 200); });
-    root.querySelectorAll("[data-filter]").forEach((input) => input.addEventListener("change", () => { this.state.showSpells = root.querySelector('[name="filter-spell"]').checked; this.state.showItems = root.querySelector('[name="filter-item"]').checked; this.state.itemType = root.querySelector('[name="filter-item-type"]').value; this.state.sortAlpha = root.querySelector('[name="filter-sort-alpha"]').checked; void this.search(); }));
-    if (!this.state.results.length) void this.search();
+    root.querySelector('[name="store-search"]')?.addEventListener("input", (event) => { this.viewState.searchTerm = event.target.value; clearTimeout(this.searchTimer); this.searchTimer = setTimeout(() => void this.search(), 200); });
+    root.querySelectorAll("[data-filter]").forEach((input) => input.addEventListener("change", () => { this.viewState.showSpells = root.querySelector('[name="filter-spell"]').checked; this.viewState.showItems = root.querySelector('[name="filter-item"]').checked; this.viewState.itemType = root.querySelector('[name="filter-item-type"]').value; this.viewState.sortAlpha = root.querySelector('[name="filter-sort-alpha"]').checked; this.viewState.limit = 100; void this.search(); }));
+    if (!this.viewState.results.length) void this.search();
   }
   async search() {
-    const term = this.state.searchTerm.trim().toLowerCase();
+    const term = this.viewState.searchTerm.trim().toLowerCase();
     const filters = getActiveStore()?.filters ?? currentGmFilters;
-    const showItems = this.state.showItems || !this.state.showSpells;
-    const showSpells = this.state.showSpells || !this.state.showItems;
+    const showItems = this.viewState.showItems || !this.viewState.showSpells;
+    const showSpells = this.viewState.showSpells || !this.viewState.showItems;
     const [items, spells] = await Promise.all([showItems ? getItemIndex() : [], showSpells ? getItemIndex({ spells: true }) : []]);
     const matches = ({ entry }) => {
       const level = levelOf(entry); const rarity = rarityOf(entry); const traits = traitsOf(entry).map((v) => v.toLowerCase());
-      return (!term || entry.name?.toLowerCase().includes(term)) && (!this.state.itemType || entry.type === this.state.itemType) && (filters?.minLevel == null || level >= filters.minLevel) && (filters?.maxLevel == null || level <= filters.maxLevel) && (!filters?.rarity || rarity === filters.rarity) && !(filters?.traits ?? []).some((trait) => !traits.includes(trait));
+      return (!term || entry.name?.toLowerCase().includes(term)) && (!this.viewState.itemType || entry.type === this.viewState.itemType) && (filters?.minLevel == null || level >= filters.minLevel) && (filters?.maxLevel == null || level <= filters.maxLevel) && (!filters?.rarity || rarity === filters.rarity) && !(filters?.traits ?? []).some((trait) => !traits.includes(trait));
     };
-    this.state.results = [...items.filter(matches), ...spells.filter(matches)].map(({ entry, pack }) => ({ itemId: entry._id, pack: pack.collection, entryType: entry.type === "spell" ? "spell" : "item", name: entry.name, icon: entry.img, price: priceOf(entry), level: levelOf(entry), rarity: rarityOf(entry), traits: traitsOf(entry), totalLabel: gold(priceOf(entry)) }));
-    if (this.state.sortAlpha) this.state.results.sort((a, b) => a.name.localeCompare(b.name, game.i18n.lang));
+    this.viewState.results = [...items.filter(matches), ...spells.filter(matches)].map(({ entry, pack }) => { const priceCopper = priceCopperOf(entry); return { itemId: entry._id, pack: pack.collection, entryType: entry.type === "spell" ? "spell" : "item", name: entry.name, icon: entry.img, price: priceCopper / 100, priceCopper, level: levelOf(entry), rarity: rarityOf(entry), traits: traitsOf(entry), totalLabel: gold(priceCopper / 100) }; });
+    if (this.viewState.sortAlpha) this.viewState.results.sort((a, b) => a.name.localeCompare(b.name, game.i18n.lang));
     await this.render();
   }
-  itemPrice(item) { return item.entryType === "spell" ? getSpellConsumablePrice(item.consumableType, item.rank) || item.price : item.price; }
-  async addWishlistItem(item) { const key = `${item.pack}.${item.itemId}`; const existing = this.state.cart.get(key); this.state.cart.set(key, { ...item, quantity: (existing?.quantity ?? 0) + item.quantity }); }
-  static async #selectResult(event, target) { this.state.selected = this.state.results.find((item) => item.itemId === target.dataset.itemId && item.pack === target.dataset.pack); this.state.description = await getItemDescription(this.state.selected.pack, this.state.selected.itemId); await this.render(); }
-  static async #addCart() { const item = this.state.selected; if (!item) return ui.notifications.warn(text("PF2EGeneralStore.Errors.SelectItem")); const quantity = await chooseQuantity(item.name, item.price); if (!quantity) return; let details = {}; if (item.entryType === "spell") { const spell = await game.packs.get(item.pack)?.getDocument(item.itemId); const selection = spell && await chooseSpellConsumable(spell); if (!selection) return; details = await createSpellConsumableSource(spell, selection) ?? {}; } const key = item.entryType === "spell" ? `${item.pack}.${item.itemId}.${details.consumableType}.${details.rank}` : `${item.pack}.${item.itemId}`; const existing = this.state.cart.get(key); this.state.cart.set(key, { ...item, ...details, quantity: (existing?.quantity ?? 0) + quantity }); await this.render(); }
-  static async #addWishlist() { const item = this.state.selected; if (!item) return ui.notifications.warn(text("PF2EGeneralStore.Errors.SelectItem")); const quantity = await chooseQuantity(item.name, item.price); if (!quantity) return; const player = { userId: game.user.id, name: this.actor?.name ?? game.user.name, avatar: game.user.avatar, tokenSrc: this.actor?.prototypeToken?.texture?.src, quantity }; await mutateWishlist("addItem", { itemId: item.itemId, pack: item.pack, name: item.name, entryType: item.entryType, price: item.price, quantity }, player); if (!game.user.isGM) void requestGmMutation("addItem", [{ itemId: item.itemId, pack: item.pack, name: item.name, entryType: item.entryType, price: item.price, quantity }, player]); }
+  itemPriceCopper(item) { return item.entryType === "spell" ? (getSpellConsumablePrice(item.consumableType, item.rank) * 100 || item.priceCopper || normalizePrice(item.price)) : item.priceCopper; }
+  async addWishlistItem(item) { const key = `${item.pack}.${item.itemId}`; const existing = this.viewState.cart.get(key); this.viewState.cart.set(key, { ...item, priceCopper: Number.isSafeInteger(item.priceCopper) ? item.priceCopper : normalizePrice(item.price), quantity: (existing?.quantity ?? 0) + item.quantity }); }
+  static async #selectResult(event, target) { this.viewState.selected = this.viewState.results.find((item) => item.itemId === target.dataset.itemId && item.pack === target.dataset.pack); this.viewState.description = await getItemDescription(this.viewState.selected.pack, this.viewState.selected.itemId); await this.render(); }
+  static async #addCart() { const item = this.viewState.selected; if (!item) return ui.notifications.warn(text("PF2EGeneralStore.Errors.SelectItem")); const quantity = await chooseQuantity(item.name, item.price); if (!quantity) return; let details = {}; if (item.entryType === "spell") { const spell = await game.packs.get(item.pack)?.getDocument(item.itemId); const selection = spell && await chooseSpellConsumable(spell); if (!selection) return; details = await createSpellConsumableSource(spell, selection) ?? {}; } const key = item.entryType === "spell" ? `${item.pack}.${item.itemId}.${details.consumableType}.${details.rank}` : `${item.pack}.${item.itemId}`; const existing = this.viewState.cart.get(key); this.viewState.cart.set(key, { ...item, ...details, quantity: (existing?.quantity ?? 0) + quantity }); await this.render(); }
+  static async #addWishlist() { const item = this.viewState.selected; if (!item) return ui.notifications.warn(text("PF2EGeneralStore.Errors.SelectItem")); const quantity = await chooseQuantity(item.name, item.price); if (!quantity) return; const player = { userId: game.user.id, name: this.actor?.name ?? game.user.name, avatar: game.user.avatar, tokenSrc: this.actor?.prototypeToken?.texture?.src, quantity }; await mutateWishlist("addItem", { itemId: item.itemId, pack: item.pack, name: item.name, entryType: item.entryType, price: item.price, quantity }, player); if (!game.user.isGM) void requestGmMutation("addItem", [{ itemId: item.itemId, pack: item.pack, name: item.name, entryType: item.entryType, price: item.price, quantity }, player]); }
   static #viewWishlist() { return openWishlist(this); }
-  static #removeCart(event, target) { this.state.cart.delete(target.closest("[data-cart-key]")?.dataset.cartKey); this.render(); }
-  static #loadMore() { this.state.limit += 100; this.render(); }
-  static async #checkout() { const paymentActor = this.rootElement.querySelector('[name="payment-source"]:checked')?.value === "party" ? partyActor() : this.actor; for (const item of this.state.cart.values()) { const result = await purchaseItem({ buyer: this.actor, paymentActor, packId: item.pack, itemId: item.itemId, quantity: item.quantity, expectedPriceCopper: Math.round(this.itemPrice(item) * 100), storeId: getActiveStoreId(), purchaseSource: item.consumableSource }); if (!result.ok) return ui.notifications.warn(text("PF2EGeneralStore.Errors.PurchaseFailed")); } this.state.cart.clear(); ui.notifications.info(text("PF2EGeneralStore.Store.CartPurchased")); await this.render(); }
+  static #removeCart(event, target) { this.viewState.cart.delete(target.closest("[data-cart-key]")?.dataset.cartKey); this.render(); }
+  static #loadMore() { this.viewState.limit += 100; this.render(); }
+  static async #checkout() { const paymentActor = this.rootElement.querySelector('[name="payment-source"]:checked')?.value === "party" ? partyActor() : this.actor; const result = await checkoutCart(this.viewState.cart, (item) => purchaseItem({ buyer: this.actor, paymentActor, packId: item.pack, itemId: item.itemId, quantity: item.quantity, expectedPriceCopper: this.itemPriceCopper(item), storeId: getActiveStoreId(), purchaseSource: item.consumableSource })); if (!result.ok) { await this.render(); return ui.notifications.warn(text("PF2EGeneralStore.Errors.PurchaseFailed")); } ui.notifications.info(text("PF2EGeneralStore.Store.CartPurchased")); await this.render(); }
   static #sell() { return openSale(this.actor); }
   static async #logo(event) { if (!game.user.isGM) return; if (event.shiftKey) { await game.settings.set(MODULE_ID, SETTINGS.SHOP_LOGO, ""); return this.render(); } const Picker = globalThis.FilePicker ?? foundry.applications.apps.FilePicker; new Picker({ type: "image", current: game.settings.get(MODULE_ID, SETTINGS.SHOP_LOGO), callback: async (path) => { await game.settings.set(MODULE_ID, SETTINGS.SHOP_LOGO, path); this.render(); } }).render({ force: true }); }
 }
@@ -276,7 +284,7 @@ Hooks.once("ready", () => {
     if (!game.user.isGM || ![SOCKET_TYPES.WISHLIST_ADD, SOCKET_TYPES.WISHLIST_REMOVE_OWN].includes(payload?.type)) return;
     const validated = await validateWishlistRequest(payload); if (!validated) return rejectWishlistRequest(payload);
     let result;
-    if (validated.type === SOCKET_TYPES.WISHLIST_ADD) { const item = validated.item; result = await mutateWishlist("addItem", { itemId: item.id, pack: validated.pack.collection, name: item.name, entryType: item.type === "spell" ? "spell" : "item", price: priceOf(item), quantity: validated.quantity }, { ...contributorFromUser(validated.user), quantity: validated.quantity }); }
+    if (validated.type === SOCKET_TYPES.WISHLIST_ADD) { const item = validated.item; result = await mutateWishlist("addItem", { itemId: item.id, pack: validated.pack.collection, name: item.name, entryType: item.type === "spell" ? "spell" : "item", price: priceCopperOf(item) / 100, quantity: validated.quantity }, { ...contributorFromUser(validated.user), quantity: validated.quantity }); }
     else result = await mutateWishlist("removePlayerFromWishlist", validated.itemKey, validated.user.id, validated.quantity);
     game.socket.emit(`module.${MODULE_ID}`, { type: SOCKET_TYPES.WISHLIST_RESULT, requestId: validated.requestId, result });
   });

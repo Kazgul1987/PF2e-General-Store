@@ -3,22 +3,22 @@
     <header class="store-manager__header">
       <div class="store-manager__active">
         <label>
-          <strong>Aktiver Shop{{#if hasScene}} (diese Szene){{else}} (Fallback){{/if}}:</strong>
+          <strong>{{localize "PF2EGeneralStore.StoreManager.Active"}} {{#if hasScene}}{{localize "PF2EGeneralStore.StoreManager.ThisScene"}}{{else}}{{localize "PF2EGeneralStore.StoreManager.Fallback"}}{{/if}}:</strong>
           <select name="active-store">
-            <option value="" {{#unless activeId}}selected="selected"{{/unless}}>— Kein Shop —</option>
+            <option value="" {{#unless activeId}}selected="selected"{{/unless}}>— {{localize "PF2EGeneralStore.StoreManager.NoStore"}} —</option>
             {{#each stores as |store|}}
               <option value="{{store.id}}" {{#if store.isActive}}selected="selected"{{/if}}>{{store.name}}</option>
             {{/each}}
           </select>
         </label>
         <p class="store-manager__hint">
-          Spieler sehen diesen Namen im Einkaufsmenü. Die Filter unten bestimmen das Sortiment (Item-Level, Rarity, Traits).
+          {{localize "PF2EGeneralStore.StoreManager.Hint"}}
         </p>
       </div>
 
       <div class="store-manager__toolbar">
         <button type="button" class="store-manager__add" data-action="addStore">
-          <i class="fas fa-plus" aria-hidden="true"></i> Neuer Shop
+          <i class="fas fa-plus" aria-hidden="true"></i> {{localize "PF2EGeneralStore.StoreManager.NewStore"}}
         </button>
       </div>
     </header>
@@ -27,12 +27,12 @@
       <table class="store-manager__table">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Typ</th>
-            <th>Min</th>
-            <th>Max</th>
-            <th>Rarity</th>
-            <th>Traits</th>
+            <th>{{localize "PF2EGeneralStore.StoreManager.Name"}}</th>
+            <th>{{localize "PF2EGeneralStore.StoreManager.Type"}}</th>
+            <th>{{localize "PF2EGeneralStore.StoreManager.Min"}}</th>
+            <th>{{localize "PF2EGeneralStore.StoreManager.Max"}}</th>
+            <th>{{localize "PF2EGeneralStore.Filters.Rarity"}}</th>
+            <th>{{localize "PF2EGeneralStore.StoreManager.Traits"}}</th>
             <th></th>
           </tr>
         </thead>
@@ -40,12 +40,12 @@
           {{#each stores as |store|}}
             <tr class="store-manager__row" data-store-id="{{store.id}}">
               <td>
-                <input type="text" class="store-manager__name" value="{{store.name}}" placeholder="z.B. Otari – Krämerladen" />
+                <input type="text" class="store-manager__name" value="{{store.name}}" placeholder="{{localize "PF2EGeneralStore.StoreManager.NamePlaceholder"}}" />
               </td>
               <td>
                 <select class="store-manager__kind">
-                  <option value="settlement" {{#unless store.isNpc}}selected="selected"{{/unless}}>Settlement</option>
-                  <option value="npc" {{#if store.isNpc}}selected="selected"{{/if}}>NPC</option>
+                  <option value="settlement" {{#unless store.isNpc}}selected="selected"{{/unless}}>{{localize "PF2EGeneralStore.StoreManager.Settlement"}}</option>
+                  <option value="npc" {{#if store.isNpc}}selected="selected"{{/if}}>{{localize "PF2EGeneralStore.StoreManager.NPC"}}</option>
                 </select>
               </td>
               <td class="store-manager__num">
@@ -56,18 +56,18 @@
               </td>
               <td>
                 <select class="store-manager__rarity">
-                  <option value="" {{#unless store.rarity}}selected="selected"{{/unless}}>Alle</option>
-                  <option value="common" {{#if store.isCommon}}selected="selected"{{/if}}>Common</option>
-                  <option value="uncommon" {{#if store.isUncommon}}selected="selected"{{/if}}>Uncommon</option>
-                  <option value="rare" {{#if store.isRare}}selected="selected"{{/if}}>Rare</option>
-                  <option value="unique" {{#if store.isUnique}}selected="selected"{{/if}}>Unique</option>
+                  <option value="" {{#unless store.rarity}}selected="selected"{{/unless}}>{{localize "PF2EGeneralStore.Common.All"}}</option>
+                  <option value="common" {{#if store.isCommon}}selected="selected"{{/if}}>{{localize "PF2EGeneralStore.StoreManager.Common"}}</option>
+                  <option value="uncommon" {{#if store.isUncommon}}selected="selected"{{/if}}>{{localize "PF2EGeneralStore.StoreManager.Uncommon"}}</option>
+                  <option value="rare" {{#if store.isRare}}selected="selected"{{/if}}>{{localize "PF2EGeneralStore.StoreManager.Rare"}}</option>
+                  <option value="unique" {{#if store.isUnique}}selected="selected"{{/if}}>{{localize "PF2EGeneralStore.StoreManager.Unique"}}</option>
                 </select>
               </td>
               <td>
-                <input type="text" class="store-manager__traits" value="{{store.traitsInput}}" placeholder="traits, kommagetrennt" />
+                <input type="text" class="store-manager__traits" value="{{store.traitsInput}}" placeholder="{{localize "PF2EGeneralStore.StoreManager.TraitsPlaceholder"}}" />
               </td>
               <td class="store-manager__actions">
-                <button type="button" class="store-manager__delete" data-action="deleteStore" title="Shop löschen">
+                <button type="button" class="store-manager__delete" data-action="deleteStore" title="{{localize "PF2EGeneralStore.StoreManager.Delete"}}">
                   <i class="fas fa-trash" aria-hidden="true"></i>
                 </button>
               </td>

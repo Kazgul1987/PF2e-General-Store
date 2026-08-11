@@ -11,7 +11,9 @@ Ein Foundry-VTT-Modul für **Pathfinder 2e**, das einen kompakt durchsuchbaren G
 
 Der kleine Einstiegspunkt `scripts/main.js` registriert Einstellungen und Hooks. Die bestehende Oberfläche wurde verhaltensschonend nach `scripts/applications/store-app.js` verschoben; neue fachliche Grenzen liegen in `data/`, `pf2e/` und `wishlist/`. PF2e-Währungs- und Transaktionszugriffe sind zentralisiert, Compendium-Indizes werden dedupliziert zwischengespeichert und Shop-Daten werden beim Lesen normalisiert.
 
-Die komplexen Store-Dialoge verwenden vorerst weiterhin den Legacy-`Dialog`, weil eine mechanische Migration den Warenkorb- und Spell-Workflow gefährden würde. Neue Dienste sind v14-orientiert; eine vollständige ApplicationV2-Migration bleibt ein späterer, separat testbarer UI-Schritt.
+Die moduleigenen Oberflächen für `StoreApp`, `WishlistApp`, `SellApp`, `StoreManagerApp` und `GmFiltersApp` verwenden unter Foundry VTT v14 `ApplicationV2` mit `HandlebarsApplicationMixin`. Kleine modale Interaktionen verwenden `DialogV2`; Scene Controls werden über `getSceneControlButtons` registriert.
+
+Die Schichten bleiben bewusst getrennt: **Applications → Services → Foundry/PF2e APIs**. Die Applications koordinieren Darstellung und Eingaben, während Währungs-, Kauf-, Verkaufs-, Wunschlisten- und Shoplogik in den bestehenden Services verbleibt.
 
 ## Installation
 

@@ -1,43 +1,43 @@
 <form class="pf2e-general-store-gm">
-  <p>General Store GM-Menü</p>
-  <p>Öffne den General Store für den aktuell ausgewählten Token oder deinen Charakter.</p>
+  <p>{{localize "PF2EGeneralStore.Filters.Menu"}}</p>
+  <p>{{localize "PF2EGeneralStore.Filters.Description"}}</p>
 
   <div class="form-group">
-    <label for="pf2e-general-store-traits">Traits (Mehrfachauswahl)</label>
+    <label for="pf2e-general-store-traits">{{localize "PF2EGeneralStore.Filters.Traits"}}</label>
     <input
       id="pf2e-general-store-traits"
       type="text"
       name="gm-traits"
-      placeholder="z.B. alchemical, consumable, fire"
+      placeholder="{{localize "PF2EGeneralStore.Filters.TraitsPlaceholder"}}"
       value="{{traitsInput}}"
     />
-    <p class="hint">Mehrere Traits mit Komma trennen.</p>
+    <p class="hint">{{localize "PF2EGeneralStore.Filters.TraitsHint"}}</p>
   </div>
 
   <div class="form-group">
-    <label for="pf2e-general-store-min-level">Min. Itemlevel</label>
+    <label for="pf2e-general-store-min-level">{{localize "PF2EGeneralStore.Filters.MinLevel"}}</label>
     <input
       id="pf2e-general-store-min-level"
       type="number"
       name="min-level"
-      placeholder="Keine"
+      placeholder="{{localize "PF2EGeneralStore.Common.None"}}"
       value="{{minLevel}}"
     />
   </div>
 
   <div class="form-group">
-    <label for="pf2e-general-store-max-level">Max. Itemlevel</label>
+    <label for="pf2e-general-store-max-level">{{localize "PF2EGeneralStore.Filters.MaxLevel"}}</label>
     <input
       id="pf2e-general-store-max-level"
       type="number"
       name="max-level"
-      placeholder="Keine"
+      placeholder="{{localize "PF2EGeneralStore.Common.None"}}"
       value="{{maxLevel}}"
     />
   </div>
 
   <div class="form-group">
-    <label for="pf2e-general-store-rarity">Seltenheit</label>
+    <label for="pf2e-general-store-rarity">{{localize "PF2EGeneralStore.Filters.Rarity"}}</label>
     <select id="pf2e-general-store-rarity" name="rarity">
       {{#each rarityOptions}}
         <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>
@@ -49,9 +49,9 @@
 
   <hr />
   <footer class="pf2e-general-store-gm__actions">
-    <button type="button" data-action="manageStores">Settlements/NPCs</button>
-    <button type="button" data-action="wishlist">Globale Wunschliste</button>
-    <button type="button" data-action="save">Filter speichern</button>
-    <button type="button" data-action="openStore">Store öffnen</button>
+    <button type="button" data-action="manageStores">{{localize "PF2EGeneralStore.Filters.ManageStores"}}</button>
+    <button type="button" data-action="wishlist">{{localize "PF2EGeneralStore.Filters.GlobalWishlist"}}</button>
+    <button type="button" data-action="save">{{localize "PF2EGeneralStore.Filters.Save"}}</button>
+    <button type="button" data-action="openStore">{{localize "PF2EGeneralStore.Filters.OpenStore"}}</button>
   </footer>
 </form>

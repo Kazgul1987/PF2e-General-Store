@@ -12,7 +12,7 @@ import { GmFiltersApp } from "./gm-filters-app.js";
 import { StoreManagerApp } from "./store-manager-app.js";
 import { WishlistApp } from "./wishlist-app.js";
 import { SellApp } from "./sell-app.js";
-import { checkoutCart } from "./store-workflows.js";
+import { checkoutCart, shouldRunInitialSearch, switchStoreActor } from "./store-workflows.js";
 
 let currentGmFilters = { ...DEFAULT_GM_FILTERS };
 let currentWishlistState = { ...DEFAULT_WISHLIST_STATE };
@@ -162,11 +162,12 @@ export class StoreApp extends GeneralStoreApplication {
   static #instance;
 
   constructor(actor, options = {}) {
-    super(options); this.actor = actor; this.viewState = { searchTerm: "", showSpells: false, showItems: false, itemType: "", sortAlpha: false, limit: 100, selected: null, description: null, cart: new Map(), results: [] }; StoreApp.#instance = this;
+    super(options); this.actor = actor; this.viewState = { searchTerm: "", showSpells: false, showItems: false, itemType: "", sortAlpha: false, limit: 100, selected: null, description: null, cart: new Map(), results: [], hasSearched: false }; StoreApp.#instance = this;
   }
   static open(actor) {
     const existing = this.#instance?.rendered ? this.#instance : null;
-    if (existing) { if (actor) existing.actor = actor; return existing.render({ force: true }); }
+    // The cart is actor-owned: its buyer/recipient is always the currently displayed actor.
+    if (existing) { switchStoreActor(existing, actor); return existing.render({ force: true }); }
     return new this(actor).render({ force: true });
   }
   static refresh() { if (this.#instance?.rendered) void this.#instance.search(); }
@@ -182,11 +183,15 @@ export class StoreApp extends GeneralStoreApplication {
   _onRender(context, options) {
     super._onRender(context, options);
     const root = this.rootElement;
-    root.querySelector('[name="store-search"]')?.addEventListener("input", (event) => { this.viewState.searchTerm = event.target.value; clearTimeout(this.searchTimer); this.searchTimer = setTimeout(() => void this.search(), 200); });
+    root.querySelector('[name="store-search"]')?.addEventListener("input", (event) => { this.viewState.searchTerm = event.target.value; this.viewState.limit = 100; clearTimeout(this.searchTimer); this.searchTimer = setTimeout(() => void this.search(), 200); });
     root.querySelectorAll("[data-filter]").forEach((input) => input.addEventListener("change", () => { this.viewState.showSpells = root.querySelector('[name="filter-spell"]').checked; this.viewState.showItems = root.querySelector('[name="filter-item"]').checked; this.viewState.itemType = root.querySelector('[name="filter-item-type"]').value; this.viewState.sortAlpha = root.querySelector('[name="filter-sort-alpha"]').checked; this.viewState.limit = 100; void this.search(); }));
-    if (!this.viewState.results.length) void this.search();
+    if (shouldRunInitialSearch(this.viewState)) {
+      this.viewState.hasSearched = true;
+      void this.search();
+    }
   }
   async search() {
+    this.viewState.hasSearched = true;
     const term = this.viewState.searchTerm.trim().toLowerCase();
     const filters = getActiveStore()?.filters ?? currentGmFilters;
     const showItems = this.viewState.showItems || !this.viewState.showSpells;
@@ -208,7 +213,19 @@ export class StoreApp extends GeneralStoreApplication {
   static #viewWishlist() { return openWishlist(this); }
   static #removeCart(event, target) { this.viewState.cart.delete(target.closest("[data-cart-key]")?.dataset.cartKey); this.render(); }
   static #loadMore() { this.viewState.limit += 100; this.render(); }
-  static async #checkout() { const paymentActor = this.rootElement.querySelector('[name="payment-source"]:checked')?.value === "party" ? partyActor() : this.actor; const result = await checkoutCart(this.viewState.cart, (item) => purchaseItem({ buyer: this.actor, paymentActor, packId: item.pack, itemId: item.itemId, quantity: item.quantity, expectedPriceCopper: this.itemPriceCopper(item), storeId: getActiveStoreId(), purchaseSource: item.consumableSource })); if (!result.ok) { await this.render(); return ui.notifications.warn(text("PF2EGeneralStore.Errors.PurchaseFailed")); } ui.notifications.info(text("PF2EGeneralStore.Store.CartPurchased")); await this.render(); }
+  static async #checkout() {
+    try {
+      const paymentActor = this.rootElement.querySelector('[name="payment-source"]:checked')?.value === "party" ? partyActor() : this.actor;
+      const result = await checkoutCart(this.viewState.cart, (item) => purchaseItem({ buyer: this.actor, paymentActor, packId: item.pack, itemId: item.itemId, quantity: item.quantity, expectedPriceCopper: this.itemPriceCopper(item), storeId: getActiveStoreId(), purchaseSource: item.consumableSource }));
+      if (!result.ok) { await this.render(); return ui.notifications.warn(text("PF2EGeneralStore.Errors.PurchaseFailed")); }
+      ui.notifications.info(text("PF2EGeneralStore.Store.CartPurchased"));
+      await this.render();
+    } catch (error) {
+      console.error(`[${MODULE_ID}] Checkout failed`, error);
+      await this.render();
+      ui.notifications.error(text("PF2EGeneralStore.Errors.PurchaseFailed"));
+    }
+  }
   static #sell() { return openSale(this.actor); }
   static async #logo(event) { if (!game.user.isGM) return; if (event.shiftKey) { await game.settings.set(MODULE_ID, SETTINGS.SHOP_LOGO, ""); return this.render(); } const Picker = globalThis.FilePicker ?? foundry.applications.apps.FilePicker; new Picker({ type: "image", current: game.settings.get(MODULE_ID, SETTINGS.SHOP_LOGO), callback: async (path) => { await game.settings.set(MODULE_ID, SETTINGS.SHOP_LOGO, path); this.render(); } }).render({ force: true }); }
 }

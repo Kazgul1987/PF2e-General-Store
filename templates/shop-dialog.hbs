@@ -2,16 +2,16 @@
   <header class="store-controls">
     <div class="store-controls__header">
       <button class="store-logo {{#if isGM}}store-logo--clickable{{/if}}" type="button" data-action="logo">
-        {{#if logoSrc}}<img class="store-logo__image" src="{{logoSrc}}" alt="{{logoAlt}}">{{else}}<span class="store-logo__placeholder">Logo</span>{{/if}}
+        {{#if logoSrc}}<img class="store-logo__image" src="{{logoSrc}}" alt="{{logoAlt}}">{{else}}<span class="store-logo__placeholder">{{localize "PF2EGeneralStore.Store.Logo"}}</span>{{/if}}
       </button>
       <h1 class="store-title">{{localize "PF2EGeneralStore.Store.Title"}}</h1>
       <div class="store-context"><strong>{{localize "PF2EGeneralStore.Store.Active"}}</strong> {{activeStoreLabel}}</div>
     </div>
     <div class="store-controls__row">
       <div class="store-filters">
-        <label class="store-option"><input data-filter type="checkbox" name="filter-spell" {{#if showSpells}}checked{{/if}}> Spell</label>
-        <label class="store-option"><input data-filter type="checkbox" name="filter-item" {{#if showItems}}checked{{/if}}> Item</label>
-        <label class="store-option"><select data-filter name="filter-item-type"><option value="">{{localize "PF2EGeneralStore.Common.All"}}</option><option value="weapon">Weapon</option><option value="armor">Armor</option><option value="equipment">Equipment</option><option value="shield">Shield</option><option value="consumable">Consumable</option><option value="treasure">Treasure</option><option value="backpack">Backpack</option></select></label>
+        <label class="store-option"><input data-filter type="checkbox" name="filter-spell" {{#if showSpells}}checked{{/if}}> {{localize "PF2EGeneralStore.Store.Spells"}}</label>
+        <label class="store-option"><input data-filter type="checkbox" name="filter-item" {{#if showItems}}checked{{/if}}> {{localize "PF2EGeneralStore.Store.Items"}}</label>
+        <label class="store-option"><select data-filter name="filter-item-type"><option value="">{{localize "PF2EGeneralStore.Common.All"}}</option><option value="weapon">{{localize "PF2EGeneralStore.Store.Types.Weapon"}}</option><option value="armor">{{localize "PF2EGeneralStore.Store.Types.Armor"}}</option><option value="equipment">{{localize "PF2EGeneralStore.Store.Types.Equipment"}}</option><option value="shield">{{localize "PF2EGeneralStore.Store.Types.Shield"}}</option><option value="consumable">{{localize "PF2EGeneralStore.Store.Types.Consumable"}}</option><option value="treasure">{{localize "PF2EGeneralStore.Store.Types.Treasure"}}</option><option value="backpack">{{localize "PF2EGeneralStore.Store.Types.Backpack"}}</option></select></label>
         <label class="store-option"><input data-filter type="checkbox" name="filter-sort-alpha" {{#if sortAlpha}}checked{{/if}}> {{localize "PF2EGeneralStore.Store.SortAlpha"}}</label>
       </div>
       <div class="store-search"><input type="search" name="store-search" value="{{searchTerm}}" placeholder="{{localize "PF2EGeneralStore.Store.Search"}}"></div>
@@ -28,9 +28,9 @@
   <div class="store-main store-body">
     <div class="store-results"><ul>
       {{#each results}}
-        <li class="store-result"><button class="store-result__button {{#if selected}}selected{{/if}}" type="button" data-action="selectResult" data-pack="{{pack}}" data-item-id="{{itemId}}"><img class="store-result__icon" src="{{icon}}" alt=""><span class="store-result__details"><span class="store-result__name">{{name}}</span><span>Level {{level}}</span></span><span class="store-result__price">{{totalLabel}}</span></button></li>
+        <li class="store-result"><button class="store-result__button {{#if selected}}selected{{/if}}" type="button" data-action="selectResult" data-pack="{{pack}}" data-item-id="{{itemId}}"><img class="store-result__icon" src="{{icon}}" alt=""><span class="store-result__details"><span class="store-result__name">{{name}}</span><span>{{localize "PF2EGeneralStore.Common.Level"}} {{level}}</span></span><span class="store-result__price">{{totalLabel}}</span></button></li>
       {{else}}<li class="placeholder">{{localize "PF2EGeneralStore.Store.NoResults"}}</li>{{/each}}
-    </ul></div>
+    </ul>{{#if hasMore}}<button type="button" data-action="loadMore">{{localize "PF2EGeneralStore.Store.LoadMore"}}</button>{{/if}}</div>
     <section class="store-description"><div class="store-description__content">{{#if description}}{{{description}}}{{else}}<p class="store-description__placeholder">{{localize "PF2EGeneralStore.Store.SelectDescription"}}</p>{{/if}}</div></section>
   </div>
   <section class="pf2e-general-store-cart-dialog">

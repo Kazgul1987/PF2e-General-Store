@@ -20,6 +20,7 @@ export class WishlistApp extends GeneralStoreApplication {
   constructor(options = {}) {
     super(options);
     this.viewModel = options.viewModel ?? {};
+    this.owner = options.owner;
     this.onMoveToCart = options.onMoveToCart;
     this.onRemoveSelected = options.onRemoveSelected;
     WishlistApp.#instance = this;
@@ -35,7 +36,9 @@ export class WishlistApp extends GeneralStoreApplication {
       .filter(({ key, quantity }) => key && quantity > 0);
   }
 
-  static async #moveToCart() { await this.onMoveToCart?.(this.selections); }
+  static async #moveToCart() {
+    if (!this.owner?.addWishlistItem) return ui.notifications.warn(game.i18n.localize("PF2EGeneralStore.Errors.CartUnavailable"));
+    await this.onMoveToCart?.(this.selections);
+  }
   static async #removeSelected() { await this.onRemoveSelected?.(this.selections); }
 }
-

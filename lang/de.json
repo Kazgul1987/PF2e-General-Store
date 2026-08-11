@@ -51,6 +51,7 @@
   "PF2EGeneralStore.Sale.LootActor": "Loot-Actor",
   "PF2EGeneralStore.Sale.Open": "Verkaufen",
   "PF2EGeneralStore.Sale.SourceTitle": "Verkaufsquelle auswählen",
+  "PF2EGeneralStore.Sale.SellActor": "Verkaufs-Actor: {name}",
   "PF2EGeneralStore.Sale.Title": "Gegenstände verkaufen",
   "PF2EGeneralStore.Sale.Total": "Gesamt",
   "PF2EGeneralStore.Settings.ActiveStore": "General Store: Aktiver Shop (Fallback)",

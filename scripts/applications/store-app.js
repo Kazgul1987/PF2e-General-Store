@@ -6,13 +6,15 @@ import { createSpellConsumableSource, getDefaultSpellConsumableRank, getDefaultS
 import { getItemDescription, getItemIndex } from "../data/compendium-index.js";
 import { getActiveStore, getActiveStoreId } from "../data/stores.js";
 import { addWishlistItem, moveWishlistItemToCart, moveWishlistPlayerToCart, normalizeWishlistState, removePlayerFromWishlist, removeWishlistQuantity, wishlistTotal } from "../wishlist/model.js";
-import { DEFAULT_GM_FILTERS, DEFAULT_WISHLIST_STATE, MODULE_ID, SETTINGS, SOCKET_TYPES, TEMPLATES } from "../constants.js";
+import { DEFAULT_GM_FILTERS, DEFAULT_WISHLIST_STATE, FLAGS, MODULE_ID, SETTINGS, SOCKET_TYPES, TEMPLATES } from "../constants.js";
+import { log } from "../logger.js";
 import { GeneralStoreApplication, waitForDialog } from "./shared/application.js";
 import { GmFiltersApp } from "./gm-filters-app.js";
 import { StoreManagerApp } from "./store-manager-app.js";
 import { WishlistApp } from "./wishlist-app.js";
 import { SellApp } from "./sell-app.js";
 import { checkoutCart, shouldRunInitialSearch, switchStoreActor } from "./store-workflows.js";
+import { buildSaleSourceOptions } from "./sale-source-options.js";
 
 let currentGmFilters = { ...DEFAULT_GM_FILTERS };
 let currentWishlistState = { ...DEFAULT_WISHLIST_STATE };
@@ -250,11 +252,26 @@ async function showSellApp(sourceActor, payoutActor) {
 async function openSale(actor) {
   if (!actor?.isOwner) return ui.notifications.warn(text("PF2EGeneralStore.Errors.Permission"));
   const party = partyActor();
-  const data = await choose({ title: text("PF2EGeneralStore.Sale.SourceTitle"), content: `<form><label><input type="radio" name="source" value="actor" checked>${escape(actor.name)}</label>${party ? `<label><input type="radio" name="source" value="party">${escape(party.name)}</label>` : ""}${game.user.isGM ? `<label><input type="radio" name="source" value="loot">${text("PF2EGeneralStore.Sale.LootActor")}</label>` : ""}</form>` });
+  const configuredId = game.user?.getFlag?.("world", FLAGS.SELL_LOOT_ACTOR);
+  const configured = configuredId ? game.actors?.get?.(configuredId) : null;
+  if (configuredId && !configured && game.user?.isGM) log.warn("Configured Sell Actor no longer exists", { actorId: configuredId });
+  else if (configuredId && game.user?.isGM && (!configured.isOwner || !configured.isOfType?.("loot"))) log.warn("Configured Sell Actor is not usable for sales", { actorId: configuredId });
+  const validConfigured = game.user?.isGM && configured?.isOwner && configured.isOfType?.("loot") && party?.isOwner ? configured : null;
+  const options = buildSaleSourceOptions([
+    { actor, role: "actor", label: actor.name },
+    validConfigured && { actor: validConfigured, role: "sellActor", label: game.i18n.format("PF2EGeneralStore.Sale.SellActor", { name: validConfigured.name }) },
+    party?.isOwner && { actor: party, role: "party", label: party.name },
+  ]);
+  const content = options.map((option, index) => `<label><input type="radio" name="source" value="${escape(option.actorId)}" ${index === 0 ? "checked" : ""}>${escape(option.label)}</label>`).join("");
+  const lootChoice = game.user.isGM && party?.isOwner ? `<label><input type="radio" name="source" value="loot">${text("PF2EGeneralStore.Sale.LootActor")}</label>` : "";
+  const data = await choose({ title: text("PF2EGeneralStore.Sale.SourceTitle"), content: `<form>${content}${lootChoice}</form>` });
   const source = data?.get("source"); if (!source) return;
-  if (source === "party") return showSellApp(party, party);
-  if (source === "loot") { const actors = game.actors.contents.filter((entry) => entry.isOfType?.("loot")); const selection = await choose({ title: text("PF2EGeneralStore.Sale.LootActor"), content: `<form><select name="actor">${actors.map((entry) => `<option value="${entry.id}">${escape(entry.name)}</option>`).join("")}</select></form>` }); const loot = game.actors.get(selection?.get("actor")); if (loot && party) return showSellApp(loot, party); return; }
-  return showSellApp(actor, actor);
+  if (source === "loot") { const actors = game.actors.contents.filter((entry) => entry.isOfType?.("loot") && entry.isOwner); const selection = await choose({ title: text("PF2EGeneralStore.Sale.LootActor"), content: `<form><select name="actor">${actors.map((entry) => `<option value="${entry.id}">${escape(entry.name)}</option>`).join("")}</select></form>` }); const loot = game.actors.get(selection?.get("actor")); if (loot?.isOwner && loot.isOfType?.("loot") && party?.isOwner) { await game.user.setFlag("world", FLAGS.SELL_LOOT_ACTOR, loot.id); return showSellApp(loot, party); } return; }
+  const option = options.find((entry) => entry.actorId === source);
+  if (!option?.actor?.isOwner) return ui.notifications.warn(text("PF2EGeneralStore.Errors.Permission"));
+  const payoutActor = option.role === "sellActor" ? party : option.actor;
+  if (!payoutActor?.isOwner) return ui.notifications.warn(text("PF2EGeneralStore.Errors.Permission"));
+  return showSellApp(option.actor, payoutActor);
 }
 
 function singleton(App, options) {

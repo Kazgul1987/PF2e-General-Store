@@ -1,27 +1,32 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  release:
+    types:
+      - published
 
 permissions:
   contents: write
 
 jobs:
   release:
-    name: Build and publish Foundry module
+    name: Build and upload Foundry module assets
     runs-on: ubuntu-latest
 
     steps:
       # -----------------------------------------------------------------------
-      # Checkout the exact commit referenced by the release tag
+      # Checkout exactly the tag associated with the GitHub Release.
+      #
+      # Example:
+      #   GitHub Release tag: v3.0.8
       # -----------------------------------------------------------------------
-      - name: Checkout
+      - name: Checkout release tag
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
 
       # -----------------------------------------------------------------------
-      # Read module metadata
+      # Read module metadata and release tag
       # -----------------------------------------------------------------------
       - name: Read module metadata
         id: module
@@ -31,7 +36,8 @@ jobs:
 
           MODULE_ID="$(jq -r '.id' module.json)"
           MODULE_VERSION="$(jq -r '.version' module.json)"
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          RELEASE_TAG="${{ github.event.release.tag_name }}"
+          TAG_VERSION="${RELEASE_TAG#v}"
 
           if [[ -z "$MODULE_ID" || "$MODULE_ID" == "null" ]]; then
             echo "::error::module.json does not contain a valid id."
@@ -45,20 +51,21 @@ jobs:
 
           echo "id=$MODULE_ID" >> "$GITHUB_OUTPUT"
           echo "version=$MODULE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "tag_version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
 
           echo "Module:  $MODULE_ID"
           echo "Version: $MODULE_VERSION"
-          echo "Tag:     $GITHUB_REF_NAME"
+          echo "Tag:     $RELEASE_TAG"
 
       # -----------------------------------------------------------------------
-      # Verify that the Git tag matches module.json
+      # Validate that module.json and the GitHub Release tag agree.
       #
       # Example:
-      #   module.json = 3.0.8
-      #   tag         = v3.0.8
+      #   module.json: 3.0.8
+      #   release tag: v3.0.8
       # -----------------------------------------------------------------------
-      - name: Validate tag version
+      - name: Validate release version
         shell: bash
         run: |
           set -euo pipefail
@@ -69,16 +76,17 @@ jobs:
           if [[ "$MODULE_VERSION" != "$TAG_VERSION" ]]; then
             echo "::error::Version mismatch!"
             echo "::error::module.json: $MODULE_VERSION"
-            echo "::error::Git tag:     $TAG_VERSION"
+            echo "::error::release tag: $TAG_VERSION"
             echo
-            echo "Update module.json or create the correct tag before releasing."
+            echo "The release was already published, but assets will not be uploaded."
+            echo "Fix module.json/tag version consistency and publish a corrected release."
             exit 1
           fi
 
-          echo "Tag version matches module.json."
+          echo "Release tag matches module.json."
 
       # -----------------------------------------------------------------------
-      # Run Node regression tests if test files exist
+      # Run existing Node regression tests.
       # -----------------------------------------------------------------------
       - name: Run tests
         shell: bash
@@ -92,14 +100,17 @@ jobs:
           fi
 
       # -----------------------------------------------------------------------
-      # Syntax-check JavaScript and MJS files
+      # Syntax-check all JavaScript source/test files.
       # -----------------------------------------------------------------------
       - name: Check JavaScript syntax
         shell: bash
         run: |
           set -euo pipefail
 
+          FOUND_FILES=0
+
           while IFS= read -r -d '' file; do
+            FOUND_FILES=1
             echo "Checking $file"
             node --check "$file"
           done < <(
@@ -109,8 +120,12 @@ jobs:
               -print0 2>/dev/null
           )
 
+          if [[ "$FOUND_FILES" -eq 0 ]]; then
+            echo "No JavaScript files found to check."
+          fi
+
       # -----------------------------------------------------------------------
-      # Validate Foundry manifest metadata
+      # Validate Foundry manifest URLs and metadata.
       # -----------------------------------------------------------------------
       - name: Validate Foundry manifest
         shell: bash
@@ -119,8 +134,8 @@ jobs:
 
           MODULE_ID="$(jq -r '.id' module.json)"
           VERSION="$(jq -r '.version' module.json)"
-          MANIFEST="$(jq -r '.manifest' module.json)"
-          DOWNLOAD="$(jq -r '.download' module.json)"
+          MANIFEST="$(jq -r '.manifest // empty' module.json)"
+          DOWNLOAD="$(jq -r '.download // empty' module.json)"
 
           if [[ "$MODULE_ID" != "pf2e-general-store" ]]; then
             echo "::error::Unexpected module id: $MODULE_ID"
@@ -132,22 +147,22 @@ jobs:
             exit 1
           fi
 
-          if [[ -z "$MANIFEST" || "$MANIFEST" == "null" ]]; then
+          if [[ -z "$MANIFEST" ]]; then
             echo "::error::module.json has no manifest URL."
             exit 1
           fi
 
-          if [[ -z "$DOWNLOAD" || "$DOWNLOAD" == "null" ]]; then
+          if [[ -z "$DOWNLOAD" ]]; then
             echo "::error::module.json has no download URL."
             exit 1
           fi
 
           if [[ "$MANIFEST" != *"/releases/latest/download/module.json" ]]; then
-            echo "::warning::Manifest URL does not use the expected latest-release asset."
+            echo "::warning::Manifest URL does not use releases/latest/download/module.json."
           fi
 
           if [[ "$DOWNLOAD" != *"/releases/latest/download/pf2e-general-store.zip" ]]; then
-            echo "::warning::Download URL does not use the expected release ZIP."
+            echo "::warning::Download URL does not use releases/latest/download/pf2e-general-store.zip."
           fi
 
           echo "Foundry manifest looks valid."
@@ -155,10 +170,10 @@ jobs:
           echo "Download: $DOWNLOAD"
 
       # -----------------------------------------------------------------------
-      # Build Foundry installation ZIP
+      # Build the Foundry installation ZIP.
       #
-      # module.json must be at the ZIP root.
-      # Development-only files are excluded.
+      # Important:
+      # module.json must be directly at the archive root.
       # -----------------------------------------------------------------------
       - name: Build release ZIP
         id: package
@@ -193,14 +208,8 @@ jobs:
           echo "Created release archive:"
           ls -lh ".release/${ZIP_NAME}"
 
-          echo
-          echo "Archive contents:"
-          unzip -l ".release/${ZIP_NAME}"
-
       # -----------------------------------------------------------------------
-      # Validate ZIP structure
-      #
-      # Foundry requires module.json directly at archive root.
+      # Validate archive structure before upload.
       # -----------------------------------------------------------------------
       - name: Validate release ZIP
         shell: bash
@@ -215,33 +224,78 @@ jobs:
           fi
 
           if ! unzip -Z1 "$ZIP" | grep -qx "scripts/main.js"; then
-            echo "::error::scripts/main.js is missing from the release ZIP."
+            echo "::error::scripts/main.js is missing from the ZIP."
+            exit 1
+          fi
+
+          if unzip -Z1 "$ZIP" | grep -q '^tests/'; then
+            echo "::error::tests/ unexpectedly exists in the release ZIP."
+            exit 1
+          fi
+
+          if unzip -Z1 "$ZIP" | grep -q '^\.github/'; then
+            echo "::error::.github/ unexpectedly exists in the release ZIP."
             exit 1
           fi
 
           echo "Release ZIP structure looks valid."
 
+          echo
+          echo "Archive contents:"
+          unzip -l "$ZIP"
+
       # -----------------------------------------------------------------------
-      # Create GitHub Release and upload:
+      # Upload the generated Foundry ZIP and module.json to the GitHub Release
+      # which triggered this workflow.
       #
-      # - pf2e-general-store.zip
-      # - module.json
-      #
-      # The manifest can therefore use:
-      #
-      # /releases/latest/download/module.json
-      # /releases/latest/download/pf2e-general-store.zip
+      # --clobber makes workflow re-runs practical by replacing assets with the
+      # same name.
       # -----------------------------------------------------------------------
-      - name: Create GitHub Release
+      - name: Upload assets to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
 
-          gh release create "${GITHUB_REF_NAME}" \
+          RELEASE_TAG="${{ github.event.release.tag_name }}"
+
+          gh release upload "$RELEASE_TAG" \
             "${{ steps.package.outputs.zip }}" \
             "module.json" \
-            --title "PF2e General Store ${{ steps.module.outputs.version }}" \
-            --generate-notes \
-            --verify-tag
+            --clobber
+
+      # -----------------------------------------------------------------------
+      # Final verification: check that both assets are attached.
+      # -----------------------------------------------------------------------
+      - name: Verify uploaded release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RELEASE_TAG="${{ github.event.release.tag_name }}"
+          ZIP_NAME="${{ steps.package.outputs.zip_name }}"
+
+          ASSETS="$(
+            gh release view "$RELEASE_TAG" \
+              --json assets \
+              --jq '.assets[].name'
+          )"
+
+          echo "Release assets:"
+          echo "$ASSETS"
+
+          if ! grep -qx "$ZIP_NAME" <<< "$ASSETS"; then
+            echo "::error::$ZIP_NAME was not uploaded to the release."
+            exit 1
+          fi
+
+          if ! grep -qx "module.json" <<< "$ASSETS"; then
+            echo "::error::module.json was not uploaded to the release."
+            exit 1
+          fi
+
+          echo
+          echo "Release assets verified successfully."

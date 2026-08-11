@@ -1,3 +1,5 @@
+import { isPurchasableItemType } from "../pf2e/items.js";
+
 const packPromises = new Map();
 const aggregatePromises = new Map();
 const descriptions = new Map();
@@ -11,6 +13,10 @@ export function getPackIndex(pack, { spells = false } = {}) {
   return packPromises.get(key);
 }
 
+export function filterPurchasableEntries(entries) {
+  return Array.from(entries).filter((entry) => isPurchasableItemType(entry.type));
+}
+
 export function getItemIndex({ spells = false } = {}) {
   const key = spells ? "spells" : "items";
   if (aggregatePromises.has(key)) return aggregatePromises.get(key);
@@ -18,7 +24,7 @@ export function getItemIndex({ spells = false } = {}) {
     const packs = game.packs.filter((pack) => spells ? ["Item", "Spell"].includes(pack.documentName) : pack.documentName === "Item");
     const indexes = await Promise.all(packs.map((pack) => getPackIndex(pack, { spells })));
     const seen = new Set();
-    return indexes.flatMap((index, position) => Array.from(index).flatMap((entry) => {
+    return indexes.flatMap((index, position) => (spells ? Array.from(index) : filterPurchasableEntries(index)).flatMap((entry) => {
       if (spells && packs[position].documentName === "Item" && entry.type !== "spell") return [];
       const id = entry.uuid ?? `${packs[position].collection}.${entry._id}`;
       if (seen.has(id)) return [];

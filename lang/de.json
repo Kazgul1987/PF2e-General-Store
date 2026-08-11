@@ -29,6 +29,7 @@
       "Permission": "Keine Berechtigung für diese Transaktion.",
       "InvalidPurchase": "Ungültige Kaufdaten.",
       "InvalidSale": "Ungültige Verkaufsdaten.",
+      "WishlistCartSyncFailed": "Der Warenkorb wurde aktualisiert, aber die Wunschliste konnte nicht synchronisiert werden.",
       "PriceChanged": "Der Preis hat sich geändert. Bitte prüfe den Warenkorb erneut.",
       "InsufficientFunds": "Nicht genug Gold für den Kauf.",
       "PurchaseFailed": "Der Kauf ist fehlgeschlagen; eine mögliche Zahlung wurde zurückerstattet.",

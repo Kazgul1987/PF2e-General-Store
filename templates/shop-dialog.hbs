@@ -20,21 +20,21 @@
         <button type="button" data-action="addWishlist"><i class="fas fa-heart"></i> {{localize "PF2EGeneralStore.Wishlist.Add"}}</button>
         <button type="button" data-action="viewWishlist">{{localize "PF2EGeneralStore.Wishlist.View"}}</button>
         <button type="button" data-action="sell"><i class="fas fa-coins"></i> {{localize "PF2EGeneralStore.Sale.Open"}}</button>
-        <span>{{localize "PF2EGeneralStore.Cart.Title"}}: <strong>{{cartTotal}}</strong></span>
+        <span>{{localize "PF2EGeneralStore.Cart.Title"}}: <strong class="store-cart__total">{{cartTotal}}</strong></span>
       </div>
-      <div class="store-availability"><span>{{actorName}}: {{actorGold}}</span><span>{{localize "PF2EGeneralStore.Store.PartyStash"}}: {{partyGold}}</span></div>
+      <div class="store-availability"><span>{{actorName}}: <strong class="store-availability__value">{{actorGold}}</strong></span><span>{{localize "PF2EGeneralStore.Store.PartyStash"}}: <strong class="store-availability__value">{{partyGold}}</strong></span></div>
     </div>
   </header>
   <div class="store-main store-body">
     <div class="store-results"><ul>
       {{#each results}}
-        <li class="store-result"><button class="store-result__button {{#if selected}}selected{{/if}}" type="button" data-action="selectResult" data-pack="{{pack}}" data-item-id="{{itemId}}"><img class="store-result__icon" src="{{icon}}" alt=""><span class="store-result__details"><span class="store-result__name">{{name}}</span><span>{{localize "PF2EGeneralStore.Common.Level"}} {{level}}</span></span><span class="store-result__price">{{totalLabel}}</span></button></li>
+        <li class="store-result"><button class="store-result__button {{#if selected}}selected{{/if}}" type="button" data-action="selectResult" data-pack="{{pack}}" data-item-id="{{itemId}}"><img class="store-result__icon" src="{{icon}}" alt=""><span class="store-result__details"><span class="store-result__name">{{name}}</span><span class="store-result__meta">{{localize "PF2EGeneralStore.Common.Level"}} {{level}}</span></span><span class="store-result__price">{{totalLabel}}</span></button></li>
       {{else}}<li class="placeholder">{{localize "PF2EGeneralStore.Store.NoResults"}}</li>{{/each}}
     </ul>{{#if hasMore}}<button type="button" data-action="loadMore">{{localize "PF2EGeneralStore.Store.LoadMore"}}</button>{{/if}}</div>
     <section class="store-description"><div class="store-description__content">{{#if description}}{{{description}}}{{else}}<p class="store-description__placeholder">{{localize "PF2EGeneralStore.Store.SelectDescription"}}</p>{{/if}}</div></section>
   </div>
   <section class="pf2e-general-store-cart-dialog">
-    <ul class="cart-dialog__items">{{#each cart}}<li class="cart-dialog__item" data-cart-key="{{key}}"><span>{{name}} ×{{quantity}}</span><span>{{totalLabel}}</span><button type="button" data-action="removeCart" aria-label="{{localize "PF2EGeneralStore.Cart.Remove"}}">×</button></li>{{/each}}</ul>
+    <ul class="cart-dialog__items">{{#each cart}}<li class="cart-dialog__item" data-cart-key="{{key}}"><span>{{name}} ×{{quantity}}</span><span class="cart-dialog__price">{{totalLabel}}</span><button type="button" data-action="removeCart" aria-label="{{localize "PF2EGeneralStore.Cart.Remove"}}">×</button></li>{{/each}}</ul>
     {{#if cart.length}}<label><input type="radio" name="payment-source" value="actor" checked> {{actorName}}</label><label><input type="radio" name="payment-source" value="party"> {{localize "PF2EGeneralStore.Store.PartyStash"}}</label><button type="button" data-action="checkout">{{localize "PF2EGeneralStore.Cart.Checkout"}}</button>{{/if}}
   </section>
 </section>
